@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "easy_entity_crosshair_hitbox_tint",
+  "version": "${version}",
+  "name": "Easy Entity Crosshair & Hitbox Tint",
+  "description": "Client side crosshair and hitbox tweaks: the crosshair changes colour while aiming at an entity (any entity or a configurable list), crosshair opacity is adjustable, and the hitbox of the aimed entity can be tinted with a custom colour, line width and opacity. No dependency besides Fabric Loader; Mod Menu is optional.",
+  "authors": [
+    "zchenx"
+  ],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "zchenx.client.easy_crosshair_modifyClient"
+    ],
+    "modmenu": [
+      "zchenx.client.ModMenuIntegration"
+    ]
+  },
+  "mixins": [
+    "easy_entity_crosshair_hitbox_tint.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "minecraft": ">=${minecraft_version} <26.4",
+    "java": ">=${java_version}"
+  },
+  "suggests": {
+    "modmenu": "*"
+  }
+}

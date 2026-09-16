@@ -1,0 +1,25 @@
+pluginManagement {
+    repositories {
+        // Mirrors first (much faster in CN); originals kept as fallbacks.
+        maven {
+            name = 'AliyunPublic'
+            url = uri('https://maven.aliyun.com/repository/public')
+        }
+        maven {
+            name = 'AliyunGradlePlugin'
+            url = uri('https://maven.aliyun.com/repository/gradle-plugin')
+        }
+        maven {
+            name = 'FabricProxy'
+            url = uri('https://repository.hanbings.io/proxy')
+        }
+        gradlePluginPortal()
+        mavenCentral()
+        maven {
+            name = 'Fabric'
+            url = uri('https://maven.fabricmc.net/')
+        }
+    }
+}
+
+rootProject.name = 'EasyCrosshairModify'
