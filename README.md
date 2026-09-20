@@ -83,7 +83,25 @@ attack_indicator_threshold = 0.885
 配置界面只用**原版控件**实现，不需要 Cloth Config / YACL 等任何额外前置。
 Mod Menu 本身也只是编译期依赖（`compileOnly`）：不装 Mod Menu 一样能用，直接改 TOML 即可。
 
-## 瞄准判定（必须在攻击范围内）
+## 用资源包自定义攻击样式贴图
+
+三种攻击标记都是普通的 GUI 精灵，**资源包可以直接重画**（32×32，透明背景，准星中心 = 贴图正中心）：
+
+```
+assets/easy_entity_crosshair_hitbox_tint/textures/gui/sprites/hud/crosshair_crit.png        # 暴击·四角虚斜线
+assets/easy_entity_crosshair_hitbox_tint/textures/gui/sprites/hud/crosshair_knockback.png   # 疾跑击退·上方 ^
+assets/easy_entity_crosshair_hitbox_tint/textures/gui/sprites/hud/crosshair_sweep.png       # 横扫·下方半弧
+```
+
+* 模组自带的三张默认贴图是**白色**的，所以 `attack_style_color` 会给它们上色；
+  如果你自己的贴图已经画好颜色，把颜色设成 `#FFFFFF` 即可原样显示。
+* 贴图不是 32×32 也没关系，会被拉伸到 32×32；想要更精细可以画 64×64。
+* 没有资源包时用模组内置贴图；**连模组自带贴图都加载不到时**（例如只用 Fabric Loader、
+  没有装 Fabric API 的整合包——26.3 的模组资源是由 `fabric-resource-loader-v0` 提供的），
+  会自动退回**内置的像素绘制**，外观与默认贴图一致，绝不会出现紫黑"缺失贴图"。
+  你自己资源包里的贴图在任何情况下都会生效。
+
+
 
 三个功能共用同一套"瞄准的是谁"判定，和原版攻击指示器保持一致：
 
