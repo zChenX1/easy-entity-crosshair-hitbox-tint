@@ -16,10 +16,19 @@ Minecraft **26.3**（Fabric）客户端模组：准星着色、瞄准实体碰�
 | `attack_indicator_enabled` | 攻击指示器（准星下方的攻击冷却显示）染色开关 | `false` |
 | `attack_indicator_color` | 攻击指示器染色（`#RRGGBB` 或 `#AARRGGBB`） | `#FF0000`（红） |
 | `attack_indicator_threshold` | 攻击冷却达到该比例才染色，`0.885` = 88.5%（也可直接写 `88.5`） | `0.885` |
+| `attack_style_enabled` | 攻击准星样式总开关（需瞄准到攻击范围内的实体才显示） | `false` |
+| `attack_style_crit` | 暴击：准星四角出现**虚斜线** | `true` |
+| `attack_style_knockback` | 疾跑击退攻击：准星上方出现 **`^`** | `true` |
+| `attack_style_sweep` | 横扫攻击：准星下方出现**半弧** | `true` |
+| `attack_style_color` | 上述三种标记的颜色（`#RRGGBB` 或 `#AARRGGBB`） | `#FF0000`（红） |
 
 * `target_entities` 每一项可以是实体 ID（`minecraft:zombie`）或实体标签（`#minecraft:raiders`），
   准星与碰撞箱功能共用这一份过滤条件。
 * 攻击指示器的**底色条不变**，只给进度条和"充满"图标染色，保证进度可读。
+* 攻击准星样式（暴击/击退/横扫）的判定**完全照抄原版 `Player#attack`**：
+  `attackStrengthScale > 0.9`、`canCriticalAttack`、`isSprinting`、`isSweepAttack`（含主手剑判断、
+  移动速度判断），因此不会出现"原版不暴击但模组显示暴击"的情况；三种标记都是 1×1 像素点画的，
+  不依赖任何贴图，资源包随便换。
 
 ## 配置文件（TOML）
 
@@ -62,10 +71,15 @@ attack_indicator_threshold = 0.885
 
 ## Mod Menu 可视化配置（可选）
 
-安装 [Mod Menu](https://modrinth.com/mod/modmenu) 后，在模组列表里点 **Configure** 会打开本模组的配置界面：
-所有开关/颜色/数值都能直接点选或输入，点「保存」立刻写回 TOML 并生效；界面里还有
-「打开 TOML 文件」按钮用于直接编辑文本。
+安装 [Mod Menu](https://modrinth.com/mod/modmenu) 后，在模组列表里点 **Configure** 会打开本模组的配置界面，
+按 **准星 / 碰撞箱 / 攻击指示器** 三个分页组织：
 
+* **准星** → 准星样式（开关、透明度、颜色、生效实体）+ 攻击准星样式（总开关、暴击虚斜线、
+  击退 `^`、横扫半弧、颜色），本页下方还有**实时预览**，改颜色/开关立刻能看到效果；
+* **碰撞箱** → 瞄准碰撞箱（着色开关、无 F3+B 也显示、颜色、透明度、线宽）；
+* **攻击指示器** → 指示器蓄力（染色开关、颜色、触发阈值）。
+
+点「保存」立刻写回 TOML 并生效；界面里还有「打开 TOML」按钮用于直接编辑文本。
 配置界面只用**原版控件**实现，不需要 Cloth Config / YACL 等任何额外前置。
 Mod Menu 本身也只是编译期依赖（`compileOnly`）：不装 Mod Menu 一样能用，直接改 TOML 即可。
 

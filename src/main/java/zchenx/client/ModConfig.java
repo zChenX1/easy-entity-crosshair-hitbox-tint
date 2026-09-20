@@ -13,11 +13,15 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.gizmos.GizmoStyle;
 import net.minecraft.resources.Identifier;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.tags.TagKey;
+import net.minecraft.util.Mth;
 import net.minecraft.util.Util;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySelector;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.item.component.AttackRange;
 import net.minecraft.world.level.ClipContext;
@@ -92,6 +96,18 @@ public final class ModConfig {
     int attackIndicatorRgb = DEFAULT_RGB;
     float attackIndicatorThreshold = DEFAULT_ATTACK_THRESHOLD;
 
+    // ---- attack crosshair styles ----
+    boolean attackStyleEnabled = false;
+    boolean attackStyleCrit = true;
+    boolean attackStyleKnockback = true;
+    boolean attackStyleSweep = true;
+    String attackStyleColor = DEFAULT_COLOR;
+    int attackStyleRgb = DEFAULT_RGB;
+
+    /** The markers to draw around the crosshair, resolved once per frame. */
+    public record AttackStyle(int color, boolean crit, boolean knockback, boolean sweep) {
+    }
+
     private ModConfig() {
     }
 
@@ -131,6 +147,12 @@ public final class ModConfig {
         copy.attackIndicatorColor = instance.attackIndicatorColor;
         copy.attackIndicatorRgb = instance.attackIndicatorRgb;
         copy.attackIndicatorThreshold = instance.attackIndicatorThreshold;
+        copy.attackStyleEnabled = instance.attackStyleEnabled;
+        copy.attackStyleCrit = instance.attackStyleCrit;
+        copy.attackStyleKnockback = instance.attackStyleKnockback;
+        copy.attackStyleSweep = instance.attackStyleSweep;
+        copy.attackStyleColor = instance.attackStyleColor;
+        copy.attackStyleRgb = instance.attackStyleRgb;
         return copy;
     }
 
@@ -139,6 +161,7 @@ public final class ModConfig {
         config.targetRgb = parseColor(config.targetColor) & 0xFFFFFF;
         config.hitboxRgb = parseColor(config.hitboxColor) & 0xFFFFFF;
         config.attackIndicatorRgb = parseColor(config.attackIndicatorColor) & 0xFFFFFF;
+        config.attackStyleRgb = parseColor(config.attackStyleColor) & 0xFFFFFF;
         config.opacity = clamp01(config.opacity);
         config.hitboxOpacity = clamp01(config.hitboxOpacity);
         if (Float.isNaN(config.hitboxLineWidth)) {
@@ -201,6 +224,59 @@ public final class ModConfig {
 
         int rgb = onTarget ? targetRgb : 0xFFFFFF;
         return (alpha << 24) | rgb;
+    }
+
+    /**
+     * Resolves the attack markers to draw around the crosshair: dashed corner strokes for a critical
+     * hit, a {@code ^} for a sprinting knockback attack and a half arc for a sweep attack.
+     *
+     * <p>The conditions mirror {@code Player#attack}: {@code attackStrengthScale > 0.9},
+     * {@code canCriticalAttack}, {@code isSprinting} and {@code isSweepAttack}. Markers are only shown
+     * while an entity is aimed at within attack range. Returns {@code null} when nothing is drawn.
+     */
+    public AttackStyle resolveAttackStyle(Minecraft minecraft) {
+        if (!attackStyleEnabled || minecraft == null || minecraft.player == null) {
+            return null;
+        }
+        LocalPlayer player = minecraft.player;
+        Entity target = aimedEntity(minecraft);
+        if (target == null) {
+            return null;
+        }
+
+        float attackStrengthScale = player.getAttackStrengthScale(0.5F);
+        boolean fullStrength = attackStrengthScale > 0.9F;
+        boolean knockback = attackStyleKnockback && player.isSprinting() && fullStrength;
+        boolean crit = attackStyleCrit && fullStrength && canCriticalAttack(player, target);
+        boolean sweep = attackStyleSweep && isSweepAttack(player, fullStrength, crit, knockback);
+        if (!crit && !knockback && !sweep) {
+            return null;
+        }
+        return new AttackStyle(0xFF000000 | attackStyleRgb, crit, knockback, sweep);
+    }
+
+    /** Mirrors {@code Player#canCriticalAttack}. */
+    private static boolean canCriticalAttack(LocalPlayer player, Entity target) {
+        return player.fallDistance > 0.0
+                && !player.onGround()
+                && !player.onClimbable()
+                && !player.isInWater()
+                && !player.isMobilityRestricted()
+                && !player.isPassenger()
+                && target instanceof LivingEntity
+                && !player.isSprinting();
+    }
+
+    /** Mirrors {@code Player#isSweepAttack}. */
+    private static boolean isSweepAttack(LocalPlayer player, boolean fullStrength, boolean crit, boolean knockback) {
+        if (!fullStrength || crit || knockback || !player.onGround()) {
+            return false;
+        }
+        double movementSqr = player.getKnownMovement().horizontalDistanceSqr();
+        if (movementSqr >= Mth.square(player.getSpeed() * 2.5)) {
+            return false;
+        }
+        return player.getItemInHand(InteractionHand.MAIN_HAND).typeHolder().is(ItemTags.SWORDS);
     }
 
     /**
@@ -479,6 +555,13 @@ public final class ModConfig {
         config.attackIndicatorColor = getString(json, "attack_indicator_color", DEFAULT_COLOR);
         config.attackIndicatorRgb = parseColor(config.attackIndicatorColor) & 0xFFFFFF;
         config.attackIndicatorThreshold = normalizeThreshold(getFloat(json, "attack_indicator_threshold", DEFAULT_ATTACK_THRESHOLD));
+
+        config.attackStyleEnabled = getBoolean(json, "attack_style_enabled", false);
+        config.attackStyleCrit = getBoolean(json, "attack_style_crit", true);
+        config.attackStyleKnockback = getBoolean(json, "attack_style_knockback", true);
+        config.attackStyleSweep = getBoolean(json, "attack_style_sweep", true);
+        config.attackStyleColor = getString(json, "attack_style_color", DEFAULT_COLOR);
+        config.attackStyleRgb = parseColor(config.attackStyleColor) & 0xFFFFFF;
         return config;
     }
 
@@ -496,27 +579,34 @@ public final class ModConfig {
     private static String toToml(ModConfig c) {
         StringBuilder sb = new StringBuilder();
         sb.append("# Easy Entity Crosshair & Hitbox Tint\n");
-        sb.append("# 保存后约 1 秒内自动生效；也可以在游戏内 Mod Menu 的配置界面里可视化修改。\n\n");
+        sb.append("# 淇濆瓨鍚庣害 1 绉掑唴鑷姩鐢熸晥锛涗篃鍙互鍦ㄦ父鎴忓唴 Mod Menu 鐨勯厤缃晫闈㈤噷鍙鍖栦慨鏀广€俓n\n");
 
-        sb.append("# ===== 准星 =====\n");
-        sb.append("# 准星功能总开关\nenabled = ").append(c.enabled).append('\n');
-        sb.append("# 准星透明度 0.0（全透明）- 1.0（不透明）\nopacity = ").append(number(c.opacity)).append('\n');
-        sb.append("# 瞄准实体时准星的颜色（#RRGGBB 或 #AARRGGBB）\ntarget_color = ").append(quote(c.targetColor)).append('\n');
-        sb.append("# 生效实体：实体 ID（minecraft:zombie）或标签（#minecraft:raiders）；留空 = 任意实体\ntarget_entities = ")
+        sb.append("# ===== 鍑嗘槦 =====\n");
+        sb.append("# 鍑嗘槦鍔熻兘鎬诲紑鍏砛nenabled = ").append(c.enabled).append('\n');
+        sb.append("# 鍑嗘槦閫忔槑搴?0.0锛堝叏閫忔槑锛? 1.0锛堜笉閫忔槑锛塡nopacity = ").append(number(c.opacity)).append('\n');
+        sb.append("# 鐬勫噯瀹炰綋鏃跺噯鏄熺殑棰滆壊锛?RRGGBB 鎴?#AARRGGBB锛塡ntarget_color = ").append(quote(c.targetColor)).append('\n');
+        sb.append("# 鐢熸晥瀹炰綋锛氬疄浣?ID锛坢inecraft:zombie锛夋垨鏍囩锛?minecraft:raiders锛夛紱鐣欑┖ = 浠绘剰瀹炰綋\ntarget_entities = ")
                 .append(array(c.targetEntities)).append('\n');
 
-        sb.append("\n# ===== 碰撞箱 =====\n");
-        sb.append("# 瞄准实体时是否给它的碰撞箱染色\nhitbox_enabled = ").append(c.hitboxEnabled).append('\n');
-        sb.append("# 即使原版 F3+B 碰撞箱显示关闭，也画出瞄准实体的碰撞箱（默认关）\nhitbox_always_show = ")
-                .append(c.hitboxAlwaysShow).append('\n');
-        sb.append("# 碰撞箱颜色（#RRGGBB 或 #AARRGGBB）\nhitbox_color = ").append(quote(c.hitboxColor)).append('\n');
-        sb.append("# 碰撞箱线条透明度 0.0 - 1.0\nhitbox_opacity = ").append(number(c.hitboxOpacity)).append('\n');
-        sb.append("# 碰撞箱线条粗细，原版为 2.5，可用 0.5 - 8.0\nhitbox_line_width = ").append(number(c.hitboxLineWidth)).append('\n');
+        sb.append("\n# ===== 鍑嗘槦 路 鏀诲嚮鍑嗘槦鏍峰紡锛堢瀯鍑嗗疄浣撴椂锛?=====\n");
+        sb.append("# 鏀诲嚮鏍峰紡鎬诲紑鍏砛nattack_style_enabled = ").append(c.attackStyleEnabled).append('\n');
+        sb.append("# 鏆村嚮锛氬噯鏄熷洓瑙掑嚭鐜拌櫄鏂滅嚎\nattack_style_crit = ").append(c.attackStyleCrit).append('\n');
+        sb.append("# 鐤捐窇鍑婚€€鏀诲嚮锛氬噯鏄熶笂鏂瑰嚭鐜?^\nattack_style_knockback = ").append(c.attackStyleKnockback).append('\n');
+        sb.append("# 妯壂鏀诲嚮锛氬噯鏄熶笅鏂瑰嚭鐜板崐寮nattack_style_sweep = ").append(c.attackStyleSweep).append('\n');
+        sb.append("# 鏀诲嚮鏍峰紡鐨勯鑹诧紙#RRGGBB 鎴?#AARRGGBB锛塡nattack_style_color = ").append(quote(c.attackStyleColor)).append('\n');
 
-        sb.append("\n# ===== 攻击指示器（准星下方的攻击冷却显示） =====\n");
-        sb.append("# 是否给攻击指示器染色\nattack_indicator_enabled = ").append(c.attackIndicatorEnabled).append('\n');
-        sb.append("# 染色颜色（#RRGGBB 或 #AARRGGBB）\nattack_indicator_color = ").append(quote(c.attackIndicatorColor)).append('\n');
-        sb.append("# 攻击冷却达到该比例时才染色：0.885 = 88.5%，也可以直接写 88.5\nattack_indicator_threshold = ")
+        sb.append("\n# ===== 纰版挒绠?=====\n");
+        sb.append("# 鐬勫噯瀹炰綋鏃舵槸鍚︾粰瀹冪殑纰版挒绠辨煋鑹瞈nhitbox_enabled = ").append(c.hitboxEnabled).append('\n');
+        sb.append("# 鍗充娇鍘熺増 F3+B 纰版挒绠辨樉绀哄叧闂紝涔熺敾鍑虹瀯鍑嗗疄浣撶殑纰版挒绠憋紙榛樿鍏筹級\nhitbox_always_show = ")
+                .append(c.hitboxAlwaysShow).append('\n');
+        sb.append("# 纰版挒绠遍鑹诧紙#RRGGBB 鎴?#AARRGGBB锛塡nhitbox_color = ").append(quote(c.hitboxColor)).append('\n');
+        sb.append("# 纰版挒绠辩嚎鏉￠€忔槑搴?0.0 - 1.0\nhitbox_opacity = ").append(number(c.hitboxOpacity)).append('\n');
+        sb.append("# 纰版挒绠辩嚎鏉＄矖缁嗭紝鍘熺増涓?2.5锛屽彲鐢?0.5 - 8.0\nhitbox_line_width = ").append(number(c.hitboxLineWidth)).append('\n');
+
+        sb.append("\n# ===== 鏀诲嚮鎸囩ず鍣紙鍑嗘槦涓嬫柟鐨勬敾鍑诲喎鍗存樉绀猴級 =====\n");
+        sb.append("# 鏄惁缁欐敾鍑绘寚绀哄櫒鏌撹壊\nattack_indicator_enabled = ").append(c.attackIndicatorEnabled).append('\n');
+        sb.append("# 鏌撹壊棰滆壊锛?RRGGBB 鎴?#AARRGGBB锛塡nattack_indicator_color = ").append(quote(c.attackIndicatorColor)).append('\n');
+        sb.append("# 鏀诲嚮鍐峰嵈杈惧埌璇ユ瘮渚嬫椂鎵嶆煋鑹诧細0.885 = 88.5%锛屼篃鍙互鐩存帴鍐?88.5\nattack_indicator_threshold = ")
                 .append(number(c.attackIndicatorThreshold)).append('\n');
         return sb.toString();
     }
@@ -676,7 +766,7 @@ public final class ModConfig {
     }
 
     /** Accepts {@code #RRGGBB}, {@code #AARRGGBB} and the same values without the leading {@code #}. */
-    private static int parseColor(String value) {
+    static int parseColor(String value) {
         if (value == null) {
             return 0xFF000000 | DEFAULT_RGB;
         }

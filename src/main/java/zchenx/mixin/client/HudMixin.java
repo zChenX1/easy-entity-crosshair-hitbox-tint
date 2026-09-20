@@ -9,6 +9,7 @@ import net.minecraft.resources.Identifier;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import zchenx.client.CrosshairStyles;
 import zchenx.client.ModConfig;
 
 /**
@@ -39,6 +40,13 @@ public class HudMixin {
             graphics.blitSprite(pipeline, sprite, x, y, width, height);
         } else {
             graphics.blitSprite(RenderPipelines.GUI_TEXTURED, sprite, x, y, width, height, color);
+        }
+        if (ModConfig.CROSSHAIR_PATH.equals(sprite.getPath())) {
+            // Attack style markers are drawn on top of the crosshair itself.
+            ModConfig.AttackStyle style = ModConfig.get().resolveAttackStyle(Minecraft.getInstance());
+            if (style != null) {
+                CrosshairStyles.drawOverlays(graphics, x, y, width, height, style.color(), style.crit(), style.knockback(), style.sweep());
+            }
         }
     }
 
