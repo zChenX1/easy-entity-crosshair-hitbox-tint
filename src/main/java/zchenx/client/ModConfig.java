@@ -1,11 +1,11 @@
 package zchenx.client;
 
 import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
@@ -39,28 +39,31 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Configuration of the mod, stored as {@code config/easy_entity_crosshair_hitbox_tint.json}.
+ * Configuration of the mod, stored as TOML in {@code config/easy_entity_crosshair_hitbox_tint.toml}.
  *
- * <p>Only the requested options are exposed: the master switch, the crosshair opacity/colour, the
- * entity filter, and the aimed-entity hitbox tint (switch, colour, opacity, line width). The file is
- * re-read automatically when it is edited on disk.
+ * <p>The file is re-read automatically when it is edited on disk, and the very same values can be
+ * edited visually through the Mod Menu config screen ({@link ConfigScreen}).
  */
 public final class ModConfig {
-    /** Sentinel telling the crosshair mixin to keep the untouched vanilla crosshair. */
+    /** Sentinel telling the mixins to keep the untouched vanilla rendering. */
     public static final int VANILLA = Integer.MIN_VALUE;
 
+    public static final String CROSSHAIR_PATH = "hud/crosshair";
+    private static final String ATTACK_INDICATOR_PREFIX = "hud/crosshair_attack_indicator_";
+    private static final String ATTACK_INDICATOR_BACKGROUND = "hud/crosshair_attack_indicator_background";
+
     private static final Logger LOGGER = LoggerFactory.getLogger("easy_entity_crosshair_hitbox_tint");
-    private static final String FILE_NAME = "easy_entity_crosshair_hitbox_tint.json";
-    private static final String CROSSHAIR_SPRITE_PATH = "hud/crosshair";
-    private static final String DEFAULT_TARGET_COLOR = "#FF0000";
-    private static final int DEFAULT_TARGET_RGB = 0xFF0000;
+    private static final String FILE_NAME = "easy_entity_crosshair_hitbox_tint.toml";
+    private static final String LEGACY_JSON_NAME = "easy_entity_crosshair_hitbox_tint.json";
+    private static final String DEFAULT_COLOR = "#FF0000";
+    private static final int DEFAULT_RGB = 0xFF0000;
     private static final float DEFAULT_HITBOX_WIDTH = 2.5F;
     private static final float MIN_HITBOX_WIDTH = 0.5F;
     private static final float MAX_HITBOX_WIDTH = 8.0F;
-    /** Cached "what am I aiming at" result, so the F3+B tint path does not raycast per entity. */
-    private static final long RAYCAST_CACHE_NANOS = 10_000_000L;
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    private static final float DEFAULT_ATTACK_THRESHOLD = 0.885F;
     private static final long CHECK_INTERVAL_MS = 1000L;
+    private static final long RAYCAST_CACHE_NANOS = 10_000_000L;
+    private static final Gson GSON = new Gson();
 
     private static ModConfig instance = new ModConfig();
     private static long nextCheck;
@@ -68,16 +71,26 @@ public final class ModConfig {
     private static Entity cachedRaycast;
     private static long cachedRaycastAt;
 
-    private boolean enabled = true;
-    private float opacity = 1.0F;
-    private String targetColor = DEFAULT_TARGET_COLOR;
-    private int targetRgb = DEFAULT_TARGET_RGB;
-    private List<String> targetEntities = new ArrayList<>();
-    private boolean hitboxEnabled = false;
-    private String hitboxColor = DEFAULT_TARGET_COLOR;
-    private int hitboxRgb = DEFAULT_TARGET_RGB;
-    private float hitboxOpacity = 1.0F;
-    private float hitboxLineWidth = DEFAULT_HITBOX_WIDTH;
+    // ---- crosshair ----
+    boolean enabled = true;
+    float opacity = 1.0F;
+    String targetColor = DEFAULT_COLOR;
+    int targetRgb = DEFAULT_RGB;
+    List<String> targetEntities = new ArrayList<>();
+
+    // ---- hitbox ----
+    boolean hitboxEnabled = false;
+    boolean hitboxAlwaysShow = false;
+    String hitboxColor = DEFAULT_COLOR;
+    int hitboxRgb = DEFAULT_RGB;
+    float hitboxOpacity = 1.0F;
+    float hitboxLineWidth = DEFAULT_HITBOX_WIDTH;
+
+    // ---- attack indicator ----
+    boolean attackIndicatorEnabled = false;
+    String attackIndicatorColor = DEFAULT_COLOR;
+    int attackIndicatorRgb = DEFAULT_RGB;
+    float attackIndicatorThreshold = DEFAULT_ATTACK_THRESHOLD;
 
     private ModConfig() {
     }
@@ -96,12 +109,86 @@ public final class ModConfig {
         return FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
     }
 
+    private static Path legacyPath() {
+        return FabricLoader.getInstance().getConfigDir().resolve(LEGACY_JSON_NAME);
+    }
+
+    /** A copy of the current values: the config screen edits the copy, so edits can be discarded. */
+    static ModConfig copy() {
+        ModConfig copy = new ModConfig();
+        copy.enabled = instance.enabled;
+        copy.opacity = instance.opacity;
+        copy.targetColor = instance.targetColor;
+        copy.targetRgb = instance.targetRgb;
+        copy.targetEntities = new ArrayList<>(instance.targetEntities);
+        copy.hitboxEnabled = instance.hitboxEnabled;
+        copy.hitboxAlwaysShow = instance.hitboxAlwaysShow;
+        copy.hitboxColor = instance.hitboxColor;
+        copy.hitboxRgb = instance.hitboxRgb;
+        copy.hitboxOpacity = instance.hitboxOpacity;
+        copy.hitboxLineWidth = instance.hitboxLineWidth;
+        copy.attackIndicatorEnabled = instance.attackIndicatorEnabled;
+        copy.attackIndicatorColor = instance.attackIndicatorColor;
+        copy.attackIndicatorRgb = instance.attackIndicatorRgb;
+        copy.attackIndicatorThreshold = instance.attackIndicatorThreshold;
+        return copy;
+    }
+
+    /** Applies edited values: they take effect immediately and are written back to the TOML file. */
+    static void save(ModConfig config) {
+        config.targetRgb = parseColor(config.targetColor) & 0xFFFFFF;
+        config.hitboxRgb = parseColor(config.hitboxColor) & 0xFFFFFF;
+        config.attackIndicatorRgb = parseColor(config.attackIndicatorColor) & 0xFFFFFF;
+        config.opacity = clamp01(config.opacity);
+        config.hitboxOpacity = clamp01(config.hitboxOpacity);
+        if (Float.isNaN(config.hitboxLineWidth)) {
+            config.hitboxLineWidth = DEFAULT_HITBOX_WIDTH;
+        }
+        instance = config;
+        write(config);
+    }
+
+    private static void write(ModConfig config) {
+        Path path = filePath();
+        try {
+            Files.createDirectories(path.getParent());
+            try (Writer writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
+                writer.write(toToml(config));
+            }
+            lastModified = Files.getLastModifiedTime(path).toMillis();
+            LOGGER.info("[EasyCrosshairHitboxTint] saved {}", path);
+        } catch (Exception e) {
+            LOGGER.warn("[EasyCrosshairHitboxTint] could not write {}", path, e);
+        }
+    }
+
+    // ------------------------------------------------------------------ decisions
+
     /**
-     * Resolves the ARGB tint of the given crosshair sprite, or {@link #VANILLA} when the sprite must
-     * be drawn exactly like vanilla does (inverted blend, no tint).
+     * The entity the crosshair is currently pointing at <b>within attack range</b>, or {@code null}.
+     *
+     * <p>Uses the vanilla pick result first, and otherwise casts a short, block-respecting ray whose
+     * length is the player's current attack reach (the same {@code AttackRange} data the vanilla
+     * attack indicator uses, so weapons with a longer reach work as well). Anything outside that
+     * reach is never considered, and walls are never looked through.
+     */
+    public static Entity aimedEntity(Minecraft minecraft) {
+        if (minecraft == null || minecraft.player == null || minecraft.level == null) {
+            return null;
+        }
+        Entity picked = targetedEntity(minecraft);
+        if (picked != null && isWithinAttackRange(minecraft, picked)) {
+            return picked;
+        }
+        return raycastWithinAttackRange(minecraft);
+    }
+
+    /**
+     * The ARGB tint of the given crosshair sprite, or {@link #VANILLA} when the sprite must be drawn
+     * exactly like vanilla does.
      */
     public int resolveCrosshairColor(Minecraft minecraft, Identifier sprite) {
-        if (!enabled || !CROSSHAIR_SPRITE_PATH.equals(sprite.getPath())) {
+        if (!enabled || !CROSSHAIR_PATH.equals(sprite.getPath())) {
             return VANILLA;
         }
 
@@ -117,11 +204,37 @@ public final class ModConfig {
     }
 
     /**
+     * The ARGB tint of the attack indicator (the cooldown bar under the crosshair), or
+     * {@link #VANILLA} while the charge is below the configured threshold.
+     *
+     * <p>The bar background is never tinted so the progress stays readable.
+     */
+    public int resolveAttackIndicatorColor(Minecraft minecraft) {
+        if (!attackIndicatorEnabled) {
+            return VANILLA;
+        }
+        LocalPlayer player = minecraft == null ? null : minecraft.player;
+        if (player == null) {
+            return VANILLA;
+        }
+        float charge = player.getAttackStrengthScale(0.0F);
+        if (!(charge >= attackIndicatorThreshold)) {
+            return VANILLA;
+        }
+        return 0xFF000000 | attackIndicatorRgb;
+    }
+
+    public boolean isAttackIndicatorSprite(Identifier sprite) {
+        return sprite.getPath().startsWith(ATTACK_INDICATOR_PREFIX);
+    }
+
+    public boolean isAttackIndicatorBackground(Identifier sprite) {
+        return ATTACK_INDICATOR_BACKGROUND.equals(sprite.getPath());
+    }
+
+    /**
      * Returns the style to draw the given entity's hitbox with, or {@code null} when the vanilla
      * hitbox must be left completely untouched.
-     *
-     * <p>Deliberately conservative: anything suspicious (feature off, entity not targeted, invalid
-     * line width) results in {@code null}, i.e. no change to the vanilla rendering at all.
      */
     public GizmoStyle resolveHitboxStyle(Entity entity) {
         if (!hitboxEnabled || entity == null) {
@@ -141,17 +254,21 @@ public final class ModConfig {
         }
 
         int alpha = Math.round(clamp01(hitboxOpacity) * 255.0F);
-        int color = (alpha << 24) | hitboxRgb;
-        return GizmoStyle.stroke(color, width);
+        return GizmoStyle.stroke((alpha << 24) | hitboxRgb, width);
     }
 
-    /** Opens the JSON file in the system editor (Notepad on Windows), creating it if needed. */
+    /** Whether the aimed entity's hitbox is drawn even while vanilla's hitbox display (F3+B) is off. */
+    public boolean isHitboxAlwaysShow() {
+        return hitboxAlwaysShow;
+    }
+
+    /** Opens the TOML file in the system editor (Notepad on Windows), creating it if needed. */
     public static void openConfigFile() {
         get();
         Path path = filePath().toAbsolutePath();
         try {
             if (!Files.exists(path)) {
-                writeDefault(path);
+                write(instance);
             }
             if (Util.getPlatform() == Util.OS.WINDOWS) {
                 new ProcessBuilder("notepad.exe", path.toString()).start();
@@ -165,25 +282,6 @@ public final class ModConfig {
         }
     }
 
-    /**
-     * The entity the crosshair is currently pointing at <b>within attack range</b>, or {@code null}.
-     *
-     * <p>Uses the vanilla pick result first, and otherwise casts a short, block-respecting ray whose
-     * length is the player's current attack reach (the same {@code AttackRange} data the vanilla
-     * attack indicator uses, so weapons with a longer reach work too). Anything outside that reach is
-     * never considered.
-     */
-    public static Entity aimedEntity(Minecraft minecraft) {
-        if (minecraft == null || minecraft.player == null || minecraft.level == null) {
-            return null;
-        }
-        Entity picked = targetedEntity(minecraft);
-        if (picked != null && isWithinAttackRange(minecraft, picked)) {
-            return picked;
-        }
-        return raycastWithinAttackRange(minecraft);
-    }
-
     private static AttackRange attackRange(LocalPlayer player) {
         AttackRange range = player.getActiveItem().get(DataComponents.ATTACK_RANGE);
         return range != null ? range : AttackRange.defaultFor(player);
@@ -192,6 +290,25 @@ public final class ModConfig {
     private static boolean isWithinAttackRange(Minecraft minecraft, Entity entity) {
         AttackRange range = attackRange(minecraft.player);
         return range != null && range.isInRange(minecraft.player, entity.getBoundingBox(), 0.0);
+    }
+
+    private static boolean isAimingAtTarget(Minecraft minecraft) {
+        Entity entity = aimedEntity(minecraft);
+        return entity != null && instance.matches(entity);
+    }
+
+    private boolean isTargeted(Minecraft minecraft, Entity entity) {
+        return aimedEntity(minecraft) == entity && matches(entity);
+    }
+
+    private static Entity targetedEntity(Minecraft minecraft) {
+        if (minecraft == null || minecraft.player == null || minecraft.level == null) {
+            return null;
+        }
+        if (minecraft.hitResult instanceof EntityHitResult hitResult) {
+            return hitResult.getEntity();
+        }
+        return null;
     }
 
     private static Entity raycastWithinAttackRange(Minecraft minecraft) {
@@ -232,25 +349,6 @@ public final class ModConfig {
             cachedRaycast = hitResult.getEntity();
         }
         return cachedRaycast;
-    }
-
-    private static boolean isAimingAtTarget(Minecraft minecraft) {
-        Entity entity = aimedEntity(minecraft);
-        return entity != null && instance.matches(entity);
-    }
-
-    private static Entity targetedEntity(Minecraft minecraft) {
-        if (minecraft == null || minecraft.player == null || minecraft.level == null) {
-            return null;
-        }
-        if (minecraft.hitResult instanceof EntityHitResult hitResult) {
-            return hitResult.getEntity();
-        }
-        return null;
-    }
-
-    private boolean isTargeted(Minecraft minecraft, Entity entity) {
-        return aimedEntity(minecraft) == entity && matches(entity);
     }
 
     private boolean matches(Entity entity) {
@@ -300,12 +398,17 @@ public final class ModConfig {
         return value < 0.0F ? 0.0F : (value > 1.0F ? 1.0F : value);
     }
 
+    // ------------------------------------------------------------------ load / save
+
     private static void reload() {
         Path path = filePath();
         try {
             if (!Files.exists(path)) {
+                if (migrateLegacy()) {
+                    return;
+                }
                 if (lastModified < 0L) {
-                    writeDefault(path);
+                    write(instance);
                 }
                 return;
             }
@@ -313,33 +416,39 @@ public final class ModConfig {
             if (modified == lastModified) {
                 return;
             }
-            // Read as text first: Notepad and other editors may save the file with a UTF-8 BOM,
-            // which would otherwise make the whole config silently fall back to the defaults.
+            // Notepad and other editors may save the file with a UTF-8 BOM.
             String content = Files.readString(path, StandardCharsets.UTF_8);
             if (!content.isEmpty() && content.charAt(0) == '\uFEFF') {
                 content = content.substring(1);
             }
-            JsonElement parsed = JsonParser.parseString(content.trim());
-            instance = fromJson(parsed != null && parsed.isJsonObject() ? parsed.getAsJsonObject() : new JsonObject());
+            instance = fromJson(parseToml(content));
             lastModified = modified;
-            LOGGER.info("[EasyCrosshairHitboxTint] loaded {} (crosshair={}, opacity={}, color={}, entities={}, hitbox={}, hitboxColor={}, hitboxOpacity={}, hitboxWidth={})",
+            LOGGER.info("[EasyCrosshairHitboxTint] loaded {} (crosshair={}/{}/{}, entities={}, hitbox={}/alwaysShow={}/{}/{}/{}, attackIndicator={}/{}/{}%)",
                     path, instance.enabled, instance.opacity, instance.targetColor, instance.targetEntities,
-                    instance.hitboxEnabled, instance.hitboxColor, instance.hitboxOpacity, instance.hitboxLineWidth);
+                    instance.hitboxEnabled, instance.hitboxAlwaysShow, instance.hitboxColor, instance.hitboxOpacity,
+                    instance.hitboxLineWidth, instance.attackIndicatorEnabled, instance.attackIndicatorColor,
+                    String.format(Locale.ROOT, "%.1f", instance.attackIndicatorThreshold * 100.0F));
         } catch (Exception e) {
             LOGGER.warn("[EasyCrosshairHitboxTint] could not read {}", path, e);
         }
     }
 
-    private static void writeDefault(Path path) {
+    /** Reads the old JSON config, if present, and rewrites it as TOML. */
+    private static boolean migrateLegacy() {
+        Path legacy = legacyPath();
+        if (!Files.exists(legacy)) {
+            return false;
+        }
         try {
-            Files.createDirectories(path.getParent());
-            try (Writer writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
-                writer.write(GSON.toJson(new ModConfig().toJson()));
-            }
-            lastModified = Files.getLastModifiedTime(path).toMillis();
-            LOGGER.info("[EasyCrosshairHitboxTint] created default config {}", path);
+            String content = Files.readString(legacy, StandardCharsets.UTF_8).trim();
+            JsonElement parsed = JsonParser.parseString(content);
+            instance = fromJson(parsed != null && parsed.isJsonObject() ? parsed.getAsJsonObject() : new JsonObject());
+            write(instance);
+            LOGGER.info("[EasyCrosshairHitboxTint] migrated {} to {}", legacy, filePath());
+            return true;
         } catch (Exception e) {
-            LOGGER.warn("[EasyCrosshairHitboxTint] could not create {}", path, e);
+            LOGGER.warn("[EasyCrosshairHitboxTint] could not migrate {}", legacy, e);
+            return false;
         }
     }
 
@@ -347,7 +456,7 @@ public final class ModConfig {
         ModConfig config = new ModConfig();
         config.enabled = getBoolean(json, "enabled", true);
         config.opacity = clamp01(getFloat(json, "opacity", 1.0F));
-        config.targetColor = getString(json, "target_color", DEFAULT_TARGET_COLOR);
+        config.targetColor = getString(json, "target_color", DEFAULT_COLOR);
         config.targetRgb = parseColor(config.targetColor) & 0xFFFFFF;
 
         JsonElement entities = json.get("target_entities");
@@ -360,24 +469,183 @@ public final class ModConfig {
         }
 
         config.hitboxEnabled = getBoolean(json, "hitbox_enabled", false);
-        config.hitboxColor = getString(json, "hitbox_color", DEFAULT_TARGET_COLOR);
+        config.hitboxAlwaysShow = getBoolean(json, "hitbox_always_show", false);
+        config.hitboxColor = getString(json, "hitbox_color", DEFAULT_COLOR);
         config.hitboxRgb = parseColor(config.hitboxColor) & 0xFFFFFF;
         config.hitboxOpacity = clamp01(getFloat(json, "hitbox_opacity", 1.0F));
         config.hitboxLineWidth = getFloat(json, "hitbox_line_width", DEFAULT_HITBOX_WIDTH);
+
+        config.attackIndicatorEnabled = getBoolean(json, "attack_indicator_enabled", false);
+        config.attackIndicatorColor = getString(json, "attack_indicator_color", DEFAULT_COLOR);
+        config.attackIndicatorRgb = parseColor(config.attackIndicatorColor) & 0xFFFFFF;
+        config.attackIndicatorThreshold = normalizeThreshold(getFloat(json, "attack_indicator_threshold", DEFAULT_ATTACK_THRESHOLD));
         return config;
     }
 
-    private JsonObject toJson() {
+    /** Accepts both a ratio (0.885) and a percentage (88.5). */
+    static float normalizeThreshold(float value) {
+        if (Float.isNaN(value)) {
+            return DEFAULT_ATTACK_THRESHOLD;
+        }
+        if (value > 1.0F) {
+            value /= 100.0F;
+        }
+        return clamp01(value);
+    }
+
+    private static String toToml(ModConfig c) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("# Easy Entity Crosshair & Hitbox Tint\n");
+        sb.append("# 保存后约 1 秒内自动生效；也可以在游戏内 Mod Menu 的配置界面里可视化修改。\n\n");
+
+        sb.append("# ===== 准星 =====\n");
+        sb.append("# 准星功能总开关\nenabled = ").append(c.enabled).append('\n');
+        sb.append("# 准星透明度 0.0（全透明）- 1.0（不透明）\nopacity = ").append(number(c.opacity)).append('\n');
+        sb.append("# 瞄准实体时准星的颜色（#RRGGBB 或 #AARRGGBB）\ntarget_color = ").append(quote(c.targetColor)).append('\n');
+        sb.append("# 生效实体：实体 ID（minecraft:zombie）或标签（#minecraft:raiders）；留空 = 任意实体\ntarget_entities = ")
+                .append(array(c.targetEntities)).append('\n');
+
+        sb.append("\n# ===== 碰撞箱 =====\n");
+        sb.append("# 瞄准实体时是否给它的碰撞箱染色\nhitbox_enabled = ").append(c.hitboxEnabled).append('\n');
+        sb.append("# 即使原版 F3+B 碰撞箱显示关闭，也画出瞄准实体的碰撞箱（默认关）\nhitbox_always_show = ")
+                .append(c.hitboxAlwaysShow).append('\n');
+        sb.append("# 碰撞箱颜色（#RRGGBB 或 #AARRGGBB）\nhitbox_color = ").append(quote(c.hitboxColor)).append('\n');
+        sb.append("# 碰撞箱线条透明度 0.0 - 1.0\nhitbox_opacity = ").append(number(c.hitboxOpacity)).append('\n');
+        sb.append("# 碰撞箱线条粗细，原版为 2.5，可用 0.5 - 8.0\nhitbox_line_width = ").append(number(c.hitboxLineWidth)).append('\n');
+
+        sb.append("\n# ===== 攻击指示器（准星下方的攻击冷却显示） =====\n");
+        sb.append("# 是否给攻击指示器染色\nattack_indicator_enabled = ").append(c.attackIndicatorEnabled).append('\n');
+        sb.append("# 染色颜色（#RRGGBB 或 #AARRGGBB）\nattack_indicator_color = ").append(quote(c.attackIndicatorColor)).append('\n');
+        sb.append("# 攻击冷却达到该比例时才染色：0.885 = 88.5%，也可以直接写 88.5\nattack_indicator_threshold = ")
+                .append(number(c.attackIndicatorThreshold)).append('\n');
+        return sb.toString();
+    }
+
+    private static String number(float value) {
+        return Float.toString(value);
+    }
+
+    private static String quote(String value) {
+        return "\"" + (value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"")) + "\"";
+    }
+
+    private static String array(List<String> values) {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < values.size(); i++) {
+            if (i > 0) {
+                sb.append(", ");
+            }
+            sb.append(quote(values.get(i)));
+        }
+        return sb.append(']').toString();
+    }
+
+    // ---- minimal TOML subset parser (flat "key = value" pairs) ----
+
+    private static JsonObject parseToml(String text) {
         JsonObject json = new JsonObject();
-        json.addProperty("enabled", enabled);
-        json.addProperty("opacity", opacity);
-        json.addProperty("target_color", targetColor);
-        json.add("target_entities", new JsonArray());
-        json.addProperty("hitbox_enabled", hitboxEnabled);
-        json.addProperty("hitbox_color", hitboxColor);
-        json.addProperty("hitbox_opacity", hitboxOpacity);
-        json.addProperty("hitbox_line_width", hitboxLineWidth);
+        for (String rawLine : text.split("\r?\n")) {
+            String line = stripComment(rawLine).trim();
+            if (line.isEmpty() || line.startsWith("[")) {
+                continue;
+            }
+            int equals = indexOutsideQuotes(line, '=');
+            if (equals < 0) {
+                continue;
+            }
+            String key = line.substring(0, equals).trim();
+            String value = line.substring(equals + 1).trim();
+            if (key.isEmpty() || value.isEmpty()) {
+                continue;
+            }
+            json.add(key, parseTomlValue(value));
+        }
         return json;
+    }
+
+    private static String stripComment(String line) {
+        boolean quoted = false;
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c == '"' && (i == 0 || line.charAt(i - 1) != '\\')) {
+                quoted = !quoted;
+            } else if (c == '#' && !quoted) {
+                return line.substring(0, i);
+            }
+        }
+        return line;
+    }
+
+    private static int indexOutsideQuotes(String line, char wanted) {
+        boolean quoted = false;
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c == '"' && (i == 0 || line.charAt(i - 1) != '\\')) {
+                quoted = !quoted;
+            } else if (c == wanted && !quoted) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static JsonElement parseTomlValue(String value) {
+        if (value.startsWith("[")) {
+            JsonArray array = new JsonArray();
+            int end = value.lastIndexOf(']');
+            String inner = end > 0 ? value.substring(1, end) : value.substring(1);
+            for (String part : splitOutsideQuotes(inner)) {
+                String item = part.trim();
+                if (!item.isEmpty()) {
+                    array.add(unquote(item));
+                }
+            }
+            return array;
+        }
+        if (value.startsWith("\"")) {
+            return new JsonPrimitive(unquote(value));
+        }
+        if ("true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value)) {
+            return new JsonPrimitive(Boolean.parseBoolean(value));
+        }
+        String numeric = value.replace("_", "");
+        try {
+            return new JsonPrimitive(Long.parseLong(numeric));
+        } catch (NumberFormatException ignored) {
+            try {
+                return new JsonPrimitive(Double.parseDouble(numeric));
+            } catch (NumberFormatException e) {
+                return new JsonPrimitive(unquote(value));
+            }
+        }
+    }
+
+    private static List<String> splitOutsideQuotes(String text) {
+        List<String> parts = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean quoted = false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '"' && (i == 0 || text.charAt(i - 1) != '\\')) {
+                quoted = !quoted;
+            }
+            if (c == ',' && !quoted) {
+                parts.add(current.toString());
+                current.setLength(0);
+            } else {
+                current.append(c);
+            }
+        }
+        parts.add(current.toString());
+        return parts;
+    }
+
+    private static String unquote(String value) {
+        String result = value.trim();
+        if (result.length() >= 2 && result.startsWith("\"") && result.endsWith("\"")) {
+            result = result.substring(1, result.length() - 1);
+        }
+        return result.replace("\\\"", "\"").replace("\\\\", "\\");
     }
 
     private static boolean getBoolean(JsonObject json, String key, boolean fallback) {
@@ -410,7 +678,7 @@ public final class ModConfig {
     /** Accepts {@code #RRGGBB}, {@code #AARRGGBB} and the same values without the leading {@code #}. */
     private static int parseColor(String value) {
         if (value == null) {
-            return 0xFF000000 | DEFAULT_TARGET_RGB;
+            return 0xFF000000 | DEFAULT_RGB;
         }
         String hex = value.trim();
         if (hex.startsWith("#")) {
@@ -423,7 +691,7 @@ public final class ModConfig {
             return hex.length() <= 6 ? 0xFF000000 | parsed : parsed;
         } catch (NumberFormatException e) {
             LOGGER.warn("[EasyCrosshairHitboxTint] invalid colour '{}', using #FF0000", value);
-            return 0xFF000000 | DEFAULT_TARGET_RGB;
+            return 0xFF000000 | DEFAULT_RGB;
         }
     }
 }

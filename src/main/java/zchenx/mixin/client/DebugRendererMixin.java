@@ -18,12 +18,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import zchenx.client.ModConfig;
 
 /**
- * Draws the hitbox of the entity the player is aiming at with the configured style, so the feature
- * works without having to turn vanilla's entity hitbox display (F3+B) on.
+ * Draws the hitbox of the aimed entity in the configured style while vanilla's own entity hitbox
+ * display (F3+B) is <b>off</b>. This is opt-in through {@code hitbox_always_show} (default off).
  *
  * <p>The box is emitted through the very same vanilla gizmo API that {@code EntityHitboxDebugRenderer}
  * uses for F3+B, i.e. it reuses the existing gizmo render path instead of adding a new renderer.
- * While the vanilla hitbox display is enabled this is skipped, because
+ * While the vanilla hitbox display is enabled this does nothing, because
  * {@code EntityHitboxDebugRendererMixin} already re-colours the box vanilla draws (this avoids
  * drawing the same box twice). Any error while emitting disables this extra drawing for the rest of
  * the session instead of breaking rendering.
@@ -45,6 +45,10 @@ public class DebugRendererMixin {
 
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null) {
+            return;
+        }
+        // Drawing the aimed entity hitbox while the vanilla display is off is opt-in (default off).
+        if (!ModConfig.get().isHitboxAlwaysShow()) {
             return;
         }
         // Vanilla's own hitbox display is on: EntityHitboxDebugRendererMixin tints that box already.
