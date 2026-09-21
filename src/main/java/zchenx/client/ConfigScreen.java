@@ -1,38 +1,44 @@
 package zchenx.client;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.StringWidget;
+import net.minecraft.client.gui.components.WidgetSprites;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 
 /**
  * The in-game config screen used by Mod Menu.
  *
- * <p>Options are grouped into the three pages 准星 / 碰撞箱 / 攻击指示器; the crosshair page also shows a
- * live preview of the attack style markers. The layout adapts to the current GUI size: the two columns
- * are scaled to fit the window, and when the rows do not fit on screen the list becomes scrollable
- * (mouse wheel, or drag the scroll bar on the right) instead of overlapping itself or the buttons.
+ * <p>Options are grouped into the three tabs 准星 / 碰撞箱 / 攻击指示器, rendered with the vanilla tab
+ * sprites (the same look as the 游戏/世界/更多 tabs). The crosshair tab also shows a live preview of the
+ * attack style markers. The layout adapts to the GUI size and the list scrolls with the vanilla
+ * scroll bar sprites when it does not fit.
  */
 public class ConfigScreen extends Screen {
     private static final int LABEL_WIDTH = 160;
     private static final int CONTROL_WIDTH = 150;
-    private static final int TAB_HEIGHT = 18;
+    private static final int TAB_HEIGHT = 24;
     private static final int MARGIN = 8;
     private static final int COLUMN_GAP = 4;
     private static final int MIN_SLOT_HEIGHT = 10;
     private static final int MAX_SLOT_HEIGHT = 20;
     private static final int PREVIEW_HEIGHT = 52;
     private static final int SCROLLBAR_WIDTH = 6;
+    private static final int SCROLLBAR_MIN_HEIGHT = 32;
     private static final String[] TABS = {"准星", "碰撞箱", "攻击指示器"};
 
     private enum Kind { HEADER, TOGGLE, EDIT, MODE }
@@ -53,6 +59,84 @@ public class ConfigScreen extends Screen {
 
         static Row mode(String text, BooleanSupplier getter, Consumer<Boolean> setter) {
             return new Row(Kind.MODE, text, null, 0, getter, setter, null);
+        }
+    }
+
+    /** The vanilla "游戏 / 世界 / 更多" tab strip, drawn exactly like {@code MenuTabBar.MenuTabButton}. */
+    private static final class TabBar extends AbstractWidget {
+        private static final WidgetSprites SPRITES = new WidgetSprites(
+                Identifier.withDefaultNamespace("widget/tab_selected"),
+                Identifier.withDefaultNamespace("widget/tab"),
+                Identifier.withDefaultNamespace("widget/tab_selected_highlighted"),
+                Identifier.withDefaultNamespace("widget/tab_highlighted"));
+
+        private final int tabWidth;
+        private final int selected;
+        private final IntConsumer onSelect;
+
+        TabBar(int x, int y, int tabWidth, int selected, IntConsumer onSelect) {
+            super(x, y, tabWidth * TABS.length, TAB_HEIGHT, Component.literal(TABS[selected]));
+            this.tabWidth = tabWidth;
+            this.selected = selected;
+            this.onSelect = onSelect;
+        }
+
+        @Override
+        protected void extractWidgetRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+            Font font = Minecraft.getInstance().font;
+            for (int i = 0; i < TABS.length; i++) {
+                int tabX = this.getX() + i * tabWidth;
+                boolean isSelected = i == selected;
+                boolean hovered = mouseX >= tabX && mouseX < tabX + tabWidth
+                        && mouseY >= this.getY() && mouseY < this.getY() + this.getHeight();
+                graphics.blitSprite(RenderPipelineTabs.GUI_TEXTURED, SPRITES.get(isSelected, hovered),
+                        tabX, this.getY(), tabWidth, this.getHeight());
+                if (isSelected && this.active) {
+                    // The selected tab is filled with the menu background and gets a focus underline,
+                    // just like the vanilla tab bar.
+                    Screen.extractMenuBackgroundTexture(graphics, Screen.MENU_BACKGROUND,
+                            tabX + 2, this.getY() + 2, 0.0F, 0.0F, tabWidth - 4, this.getHeight() - 2);
+                }
+                Component label = Component.literal(TABS[i]);
+                int color = isSelected ? 0xFFFFFFFF : (hovered ? 0xFFFFFFFF : 0xFFB0B0B0);
+                graphics.centeredText(font, label, tabX + tabWidth / 2, this.getY() + (isSelected ? 5 : 7), color);
+                if (isSelected && this.active) {
+                    int underlineWidth = Math.min(font.width(label), tabWidth - 4);
+                    int underlineLeft = tabX + (tabWidth - underlineWidth) / 2;
+                    graphics.fill(underlineLeft, this.getY() + this.getHeight() - 2,
+                            underlineLeft + underlineWidth, this.getY() + this.getHeight() - 1, 0xFFFFFFFF);
+                }
+            }
+        }
+
+        @Override
+        public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+            if (event.button() != 0 || !this.active) {
+                return false;
+            }
+            if (event.x() < this.getX() || event.x() >= this.getRight()
+                    || event.y() < this.getY() || event.y() >= this.getBottom()) {
+                return false;
+            }
+            int index = (int) ((event.x() - this.getX()) / tabWidth);
+            if (index >= 0 && index < TABS.length && index != selected) {
+                onSelect.accept(index);
+            }
+            return true;
+        }
+
+        @Override
+        protected void updateWidgetNarration(net.minecraft.client.gui.narration.NarrationElementOutput output) {
+            output.add(net.minecraft.client.gui.narration.NarratedElementType.TITLE, this.getMessage());
+        }
+    }
+
+    /** Keeps the render pipeline import out of the nested class for readability. */
+    private static final class RenderPipelineTabs {
+        static final com.mojang.renderpearl.api.pipeline.RenderPipeline GUI_TEXTURED =
+                net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED;
+
+        private RenderPipelineTabs() {
         }
     }
 
@@ -101,7 +185,7 @@ public class ConfigScreen extends Screen {
         previewX = -1;
         draggingScrollbar = false;
 
-        int contentTop = 42;
+        int contentTop = 48;
         int contentBottom = this.height - 28;
         int contentHeight = Math.max(20, contentBottom - contentTop);
 
@@ -135,19 +219,16 @@ public class ConfigScreen extends Screen {
         scrollbarTop = contentTop;
         scrollbarHeight = viewportHeight;
 
-        // ---- tabs ----
-        int tabWidth = Math.min(110, Math.max(40, (this.width - 2 * MARGIN - 8) / TABS.length));
-        int tabX = this.width / 2 - (tabWidth * TABS.length + 4 * (TABS.length - 1)) / 2;
-        for (int i = 0; i < TABS.length; i++) {
-            int target = i;
-            Button tab = addRenderableWidget(Button.builder(Component.literal(TABS[i]), b -> {
-                readFields();
-                page = target;
-                scrollRow = 0;
-                rebuildWidgets();
-            }).bounds(tabX + i * (tabWidth + 4), 22, tabWidth, TAB_HEIGHT).build());
-            tab.active = page != i;
-        }
+        // ---- vanilla style tab strip ----
+        int tabWidth = Math.max(40, (Math.min(400, this.width) - 16) / TABS.length / 2 * 2);
+        int tabsWidth = tabWidth * TABS.length;
+        int tabX = Math.max(MARGIN, (this.width - tabsWidth) / 2);
+        addRenderableWidget(new TabBar(tabX, 20, tabWidth, page, index -> {
+            readFields();
+            page = index;
+            scrollRow = 0;
+            rebuildWidgets();
+        }));
 
         // ---- preview (below the list, only when there is room) ----
         if (previewHeight > 0) {
@@ -157,9 +238,8 @@ public class ConfigScreen extends Screen {
         }
 
         // ---- bottom bar ----
-        int buttonCount = 3;
-        int buttonWidth = Math.min(110, Math.max(28, (this.width - 2 * MARGIN - 4 * (buttonCount - 1)) / buttonCount));
-        int barWidth = buttonWidth * buttonCount + 4 * (buttonCount - 1);
+        int buttonWidth = Math.min(110, Math.max(28, (this.width - 2 * MARGIN - 8) / 3));
+        int barWidth = buttonWidth * 3 + 8;
         int barX = Math.max(MARGIN, this.width / 2 - barWidth / 2);
         int buttonY = this.height - 22;
         addRenderableWidget(Button.builder(Component.literal("TOML"), b -> ModConfig.openConfigFile())
@@ -328,7 +408,7 @@ public class ConfigScreen extends Screen {
 
     private int thumbHeight() {
         int height = (int) ((long) scrollbarHeight * visibleRows / Math.max(1, totalRows));
-        return Math.max(12, Math.min(scrollbarHeight, height));
+        return Math.max(SCROLLBAR_MIN_HEIGHT, Math.min(scrollbarHeight, height));
     }
 
     private void readFields() {
@@ -395,12 +475,15 @@ public class ConfigScreen extends Screen {
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
 
         if (scrollable) {
-            int trackColor = draggingScrollbar ? 0xA0FFFFFF : 0x60FFFFFF;
-            graphics.fill(scrollbarX, scrollbarTop, scrollbarX + SCROLLBAR_WIDTH, scrollbarTop + scrollbarHeight, 0x60000000);
+            // Vanilla scroll bar sprites (widget/scroller + widget/scroller_background).
+            graphics.blitSprite(RenderPipelineTabs.GUI_TEXTURED, ScrollbarSprites.BACKGROUND,
+                    scrollbarX, scrollbarTop, SCROLLBAR_WIDTH, scrollbarHeight);
             int thumbHeight = thumbHeight();
             int maxRow = Math.max(1, totalRows - visibleRows);
             int thumbY = scrollbarTop + (int) ((long) (scrollbarHeight - thumbHeight) * scrollRow / maxRow);
-            graphics.fill(scrollbarX, thumbY, scrollbarX + SCROLLBAR_WIDTH, thumbY + thumbHeight, trackColor);
+            graphics.blitSprite(RenderPipelineTabs.GUI_TEXTURED,
+                    draggingScrollbar ? ScrollbarSprites.HIGHLIGHTED : ScrollbarSprites.THUMB,
+                    scrollbarX, thumbY, SCROLLBAR_WIDTH, thumbHeight);
         }
 
         if (previewX < 0) {
@@ -423,6 +506,15 @@ public class ConfigScreen extends Screen {
             int color = 0xFF000000 | (ModConfig.parseColor(raw) & 0xFFFFFF);
             CrosshairStyles.drawMarkers(graphics, centerX - 7, centerY - 7, 15, 15, color,
                     config.attackStyleCrit, config.attackStyleKnockback, config.attackStyleSweep, override);
+        }
+    }
+
+    private static final class ScrollbarSprites {
+        static final Identifier THUMB = Identifier.withDefaultNamespace("widget/scroller");
+        static final Identifier HIGHLIGHTED = Identifier.withDefaultNamespace("widget/scroller");
+        static final Identifier BACKGROUND = Identifier.withDefaultNamespace("widget/scroller_background");
+
+        private ScrollbarSprites() {
         }
     }
 
