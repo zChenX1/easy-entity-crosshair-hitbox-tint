@@ -21,7 +21,8 @@ Minecraft **26.3**（Fabric）客户端模组：准星着色、瞄准实体碰�
 | `attack_style_knockback` | 疾跑击退攻击：准星上方出现 **`^`** | `true` |
 | `attack_style_sweep` | 横扫攻击：准星下方出现**半弧** | `true` |
 | `attack_style_color` | 上述三种标记的颜色（`#RRGGBB` 或 `#AARRGGBB`） | `#FF0000`（红） |
-
+| `attack_style_mode` | 模式：`decorate` = 在准星周围装饰（默认）；`override` = 用对应贴图替换原版准星 | `decorate` |
+* decorate（默认）保留原版准星, 准星周围装饰; override 隐藏原版准星, 改用 crosshair_*_override.png 整把准星贴图。
 * `target_entities` 每一项可以是实体 ID（`minecraft:zombie`）或实体标签（`#minecraft:raiders`），
   准星与碰撞箱功能共用这一份过滤条件。
 * 攻击指示器的**底色条不变**，只给进度条和"充满"图标染色，保证进度可读。
@@ -91,7 +92,13 @@ Mod Menu 本身也只是编译期依赖（`compileOnly`）：不装 Mod Menu 一
 assets/easy_entity_crosshair_hitbox_tint/textures/gui/sprites/hud/crosshair_crit.png        # 暴击·四角虚斜线
 assets/easy_entity_crosshair_hitbox_tint/textures/gui/sprites/hud/crosshair_knockback.png   # 疾跑击退·上方 ^
 assets/easy_entity_crosshair_hitbox_tint/textures/gui/sprites/hud/crosshair_sweep.png       # 横扫·下方半弧
+# 覆盖模式（attack_style_mode = "override"）用的整把准星贴图，同样 32x32、白色可染色：
+assets/easy_entity_crosshair_hitbox_tint/textures/gui/sprites/hud/crosshair_crit_override.png
+assets/easy_entity_crosshair_hitbox_tint/textures/gui/sprites/hud/crosshair_knockback_override.png
+assets/easy_entity_crosshair_hitbox_tint/textures/gui/sprites/hud/crosshair_sweep_override.png
 ```
+
+
 
 * 模组自带的三张默认贴图是**白色**的，所以 `attack_style_color` 会给它们上色；
   如果你自己的贴图已经画好颜色，把颜色设成 `#FFFFFF` 即可原样显示。

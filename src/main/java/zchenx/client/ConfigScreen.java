@@ -105,6 +105,7 @@ public class ConfigScreen extends Screen {
                 y = toggleRow(labelX, controlX, y, slotHeight, "疾跑击退 · 上方 ^", config.attackStyleKnockback, v -> config.attackStyleKnockback = v);
                 y = toggleRow(labelX, controlX, y, slotHeight, "横扫 · 下方半弧", config.attackStyleSweep, v -> config.attackStyleSweep = v);
                 editRow(labelX, controlX, y, slotHeight, "攻击样式颜色 (#RRGGBB)", box -> attackStyleColorBox = box, config.attackStyleColor, 16);
+                modeRow(labelX, controlX, y, slotHeight);
             }
             case 1 -> {
                 y = header(labelX, y, slotHeight, "瞄准碰撞箱");
@@ -142,7 +143,7 @@ public class ConfigScreen extends Screen {
 
     private int slotCount() {
         return switch (page) {
-            case 0 -> 11;
+            case 0 -> 12;
             case 1 -> 6;
             default -> 4;
         };
@@ -170,6 +171,16 @@ public class ConfigScreen extends Screen {
         box.setValue(value == null ? "" : value);
         holder.accept(box);
         addRenderableWidget(box);
+        return y + slotHeight;
+    }
+
+    private int modeRow(int labelX, int controlX, int y, int slotHeight) {
+        addRenderableWidget(new StringWidget(labelX, y, LABEL_WIDTH, slotHeight - 4, Component.literal("攻击样式模式"), this.font));
+        addRenderableWidget(Button.builder(Component.literal(config.attackStyleOverride ? "覆盖模式" : "装饰模式"), b -> {
+            readFields();
+            config.attackStyleOverride = !config.attackStyleOverride;
+            rebuildWidgets();
+        }).bounds(controlX, y - 1, CONTROL_WIDTH, slotHeight - 4).build());
         return y + slotHeight;
     }
 
@@ -249,14 +260,17 @@ public class ConfigScreen extends Screen {
         int centerX = previewX + previewWidth / 2;
         int centerY = previewY + previewHeight / 2 + 2;
         // Vanilla-like crosshair for reference.
-        graphics.fill(centerX, centerY - 5, centerX + 1, centerY + 6, 0xFFFFFFFF);
-        graphics.fill(centerX - 5, centerY, centerX + 6, centerY + 1, 0xFFFFFFFF);
+        boolean override = config.attackStyleEnabled && config.attackStyleOverride;
+        if (!override) {
+            graphics.fill(centerX, centerY - 5, centerX + 1, centerY + 6, 0xFFFFFFFF);
+            graphics.fill(centerX - 5, centerY, centerX + 6, centerY + 1, 0xFFFFFFFF);
+        }
         // Attack style markers, using the values currently typed in the boxes.
         if (config.attackStyleEnabled) {
             String raw = attackStyleColorBox != null ? attackStyleColorBox.getValue() : config.attackStyleColor;
             int color = 0xFF000000 | (ModConfig.parseColor(raw) & 0xFFFFFF);
-            CrosshairStyles.drawOverlays(graphics, centerX - 7, centerY - 7, 15, 15, color,
-                    config.attackStyleCrit, config.attackStyleKnockback, config.attackStyleSweep);
+            CrosshairStyles.drawMarkers(graphics, centerX - 7, centerY - 7, 15, 15, color,
+                    config.attackStyleCrit, config.attackStyleKnockback, config.attackStyleSweep, override);
         }
     }
 

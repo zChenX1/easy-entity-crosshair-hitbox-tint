@@ -10,68 +10,116 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.Identifier;
 
 /**
- * The attack style markers drawn around the crosshair (critical hit, sprint knockback, sweep attack).
+ * The attack style markers of the crosshair (critical hit, sprint knockback, sweep attack).
  *
- * <p>Each marker is drawn from a normal GUI sprite, so <b>a resource pack can redraw it</b> by shipping
- * the same path with a higher priority:
+ * <p>Two modes are supported (see {@code attack_style_mode}):
  *
  * <ul>
- *   <li>{@code assets/easy_entity_crosshair_hitbox_tint/textures/gui/sprites/hud/crosshair_crit.png}</li>
- *   <li>{@code assets/easy_entity_crosshair_hitbox_tint/textures/gui/sprites/hud/crosshair_knockback.png}</li>
- *   <li>{@code assets/easy_entity_crosshair_hitbox_tint/textures/gui/sprites/hud/crosshair_sweep.png}</li>
+ *   <li><b>decorate</b> (default): the vanilla crosshair stays and the marker is drawn around it;</li>
+ *   <li><b>override</b>: the vanilla crosshair is hidden and replaced by the marker's crosshair
+ *       texture, so a pack can supply a completely different crosshair per attack.</li>
  * </ul>
  *
- * <p>The built-in versions of those textures (shipped in this mod, 32x32, crosshair centre in the
- * middle, white so the configured colour tints them) are only visible when a mod-resource-loader is
- * present (Fabric API). When the sprite cannot be resolved - for example with Fabric Loader alone -
- * the same shapes are drawn pixel by pixel instead, so the feature never shows a missing texture.
+ * <p>Everything comes from GUI sprites of this mod, so <b>resource packs can redraw it all</b> by
+ * shipping the same paths with a higher priority (32x32, crosshair centre in the middle):
+ *
+ * <pre>
+ * decorate: assets/easy_entity_crosshair_hitbox_tint/textures/gui/sprites/hud/crosshair_crit.png
+ *           .../crosshair_knockback.png
+ *           .../crosshair_sweep.png
+ * override: .../crosshair_crit_override.png
+ *           .../crosshair_knockback_override.png
+ *           .../crosshair_sweep_override.png
+ * </pre>
+ *
+ * <p>The shipped textures are white, so {@code attack_style_color} tints them; a pack drawn in colour
+ * can simply set the colour to {@code #FFFFFF}. When the sprites cannot be resolved (for example with
+ * Fabric Loader alone, because 26.3 provides mod resources through Fabric API) the same shapes are
+ * drawn pixel by pixel, so a missing texture is never shown.
  */
 public final class CrosshairStyles {
-    /** Sprite size; the marker texture centre is the crosshair centre. */
+    /** Sprite size; the texture centre is the crosshair centre. */
     public static final int SPRITE_SIZE = 32;
 
     private static final String NAMESPACE = "easy_entity_crosshair_hitbox_tint";
-    public static final Identifier CRIT_SPRITE = Identifier.fromNamespaceAndPath(NAMESPACE, "hud/crosshair_crit");
-    public static final Identifier KNOCKBACK_SPRITE = Identifier.fromNamespaceAndPath(NAMESPACE, "hud/crosshair_knockback");
-    public static final Identifier SWEEP_SPRITE = Identifier.fromNamespaceAndPath(NAMESPACE, "hud/crosshair_sweep");
+
+    private static final Identifier CRIT = sprite("hud/crosshair_crit");
+    private static final Identifier KNOCKBACK = sprite("hud/crosshair_knockback");
+    private static final Identifier SWEEP = sprite("hud/crosshair_sweep");
+    private static final Identifier CRIT_OVERRIDE = sprite("hud/crosshair_crit_override");
+    private static final Identifier KNOCKBACK_OVERRIDE = sprite("hud/crosshair_knockback_override");
+    private static final Identifier SWEEP_OVERRIDE = sprite("hud/crosshair_sweep_override");
 
     private static final Identifier GUI_ATLAS = Identifier.withDefaultNamespace("textures/atlas/gui.png");
     private static final long SPRITE_CACHE_NANOS = 1_000_000_000L;
 
-    private static long eecht$spriteCheckedAt;
-    private static boolean eecht$spritesAvailable;
+    /** The vanilla 15x15 crosshair shape, used by the pixel fallback of the override mode. */
+    private static final int[][] VANILLA_CROSSHAIR = {
+            {7, 3}, {7, 4}, {7, 5}, {7, 6}, {3, 7}, {4, 7}, {5, 7}, {6, 7}, {7, 7}, {8, 7}, {9, 7}, {10, 7}, {11, 7},
+            {7, 8}, {7, 9}, {7, 10}, {7, 11}
+    };
+
+    private static long spritesCheckedAt;
+    private static boolean decorateSprites;
+    private static boolean overrideSprites;
 
     private CrosshairStyles() {
     }
 
-    /** Draws all enabled markers around the crosshair sprite at {@code x, y, width, height}. */
-    public static void drawOverlays(GuiGraphicsExtractor graphics, int x, int y, int width, int height,
-                                    int color, boolean crit, boolean knockback, boolean sweep) {
+    private static Identifier sprite(String path) {
+        return Identifier.fromNamespaceAndPath(NAMESPACE, path);
+    }
+
+    /**
+     * Draws the markers for the current attack.
+     *
+     * @param override when {@code true} the caller did not draw the vanilla crosshair, so a replacement
+     *                 crosshair is drawn here instead
+     */
+    public static void drawMarkers(GuiGraphicsExtractor graphics, int x, int y, int width, int height,
+                                   int color, boolean crit, boolean knockback, boolean sweep, boolean override) {
         int centerX = x + width / 2;
         int centerY = y + height / 2;
         int spriteX = centerX - SPRITE_SIZE / 2;
         int spriteY = centerY - SPRITE_SIZE / 2;
-        boolean textured = spritesAvailable();
-        if (crit) {
-            if (textured) {
-                blit(graphics, CRIT_SPRITE, spriteX, spriteY, color);
-            } else {
-                drawCrit(graphics, centerX, centerY, color);
+        checkSprites();
+
+        if (override) {
+            if (overrideSprites) {
+                if (crit) {
+                    blit(graphics, CRIT_OVERRIDE, spriteX, spriteY, color);
+                }
+                if (knockback) {
+                    blit(graphics, KNOCKBACK_OVERRIDE, spriteX, spriteY, color);
+                }
+                if (sweep) {
+                    blit(graphics, SWEEP_OVERRIDE, spriteX, spriteY, color);
+                }
+                return;
             }
+            // No override textures available: draw the crosshair itself, then the markers.
+            drawVanillaCrosshair(graphics, centerX, centerY, color);
+        } else if (decorateSprites) {
+            if (crit) {
+                blit(graphics, CRIT, spriteX, spriteY, color);
+            }
+            if (knockback) {
+                blit(graphics, KNOCKBACK, spriteX, spriteY, color);
+            }
+            if (sweep) {
+                blit(graphics, SWEEP, spriteX, spriteY, color);
+            }
+            return;
+        }
+
+        if (crit) {
+            drawCrit(graphics, centerX, centerY, color);
         }
         if (knockback) {
-            if (textured) {
-                blit(graphics, KNOCKBACK_SPRITE, spriteX, spriteY, color);
-            } else {
-                drawKnockback(graphics, centerX, centerY, color);
-            }
+            drawKnockback(graphics, centerX, centerY, color);
         }
         if (sweep) {
-            if (textured) {
-                blit(graphics, SWEEP_SPRITE, spriteX, spriteY, color);
-            } else {
-                drawSweep(graphics, centerX, centerY, color);
-            }
+            drawSweep(graphics, centerX, centerY, color);
         }
     }
 
@@ -80,33 +128,42 @@ public final class CrosshairStyles {
         graphics.blitSprite(pipeline, sprite, x, y, SPRITE_SIZE, SPRITE_SIZE, color);
     }
 
-    /**
-     * Whether the GUI atlas actually contains our marker textures. Cached for a second, so a resource
-     * pack can add or remove them (F3+T) without restarting.
-     */
-    private static boolean spritesAvailable() {
+    /** Whether the GUI atlas contains our sprites; cached for a second so F3+T picks changes up. */
+    private static void checkSprites() {
         long now = System.nanoTime();
-        if (now - eecht$spriteCheckedAt < SPRITE_CACHE_NANOS) {
-            return eecht$spritesAvailable;
+        if (now - spritesCheckedAt < SPRITE_CACHE_NANOS) {
+            return;
         }
-        eecht$spriteCheckedAt = now;
-        eecht$spritesAvailable = false;
+        spritesCheckedAt = now;
+        decorateSprites = false;
+        overrideSprites = false;
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft == null) {
-            return false;
+            return;
         }
         try {
             if (minecraft.getTextureManager().getTexture(GUI_ATLAS) instanceof TextureAtlas atlas) {
-                TextureAtlasSprite sprite = atlas.getSprite(CRIT_SPRITE);
-                eecht$spritesAvailable = !sprite.contents().name().equals(MissingTextureAtlasSprite.getLocation());
+                decorateSprites = available(atlas, CRIT);
+                overrideSprites = available(atlas, CRIT_OVERRIDE) && available(atlas, KNOCKBACK_OVERRIDE)
+                        && available(atlas, SWEEP_OVERRIDE);
             }
         } catch (Throwable ignored) {
             // Any problem here simply means: draw the built-in pixel art.
         }
-        return eecht$spritesAvailable;
+    }
+
+    private static boolean available(TextureAtlas atlas, Identifier sprite) {
+        TextureAtlasSprite resolved = atlas.getSprite(sprite);
+        return !resolved.contents().name().equals(MissingTextureAtlasSprite.getLocation());
     }
 
     // ---- built-in fallback shapes (identical to the shipped textures) ----
+
+    private static void drawVanillaCrosshair(GuiGraphicsExtractor graphics, int centerX, int centerY, int color) {
+        for (int[] pixel : VANILLA_CROSSHAIR) {
+            pixel(graphics, centerX - 7 + pixel[0], centerY - 7 + pixel[1], color);
+        }
+    }
 
     private static void drawCrit(GuiGraphicsExtractor graphics, int centerX, int centerY, int color) {
         for (int i = 0; i < 7; i++) {

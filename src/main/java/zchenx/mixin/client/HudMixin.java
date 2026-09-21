@@ -35,18 +35,26 @@ public class HudMixin {
             at = @At(value = "INVOKE", target = BLIT_SPRITE))
     private void easycrosshairmodify$drawSprite(GuiGraphicsExtractor graphics, RenderPipeline pipeline, Identifier sprite,
                                                  int x, int y, int width, int height) {
-        int color = resolveColor(sprite);
-        if (color == ModConfig.VANILLA) {
-            graphics.blitSprite(pipeline, sprite, x, y, width, height);
-        } else {
-            graphics.blitSprite(RenderPipelines.GUI_TEXTURED, sprite, x, y, width, height, color);
-        }
-        if (ModConfig.CROSSHAIR_PATH.equals(sprite.getPath())) {
-            // Attack style markers are drawn on top of the crosshair itself.
-            ModConfig.AttackStyle style = ModConfig.get().resolveAttackStyle(Minecraft.getInstance());
-            if (style != null) {
-                CrosshairStyles.drawOverlays(graphics, x, y, width, height, style.color(), style.crit(), style.knockback(), style.sweep());
+        Minecraft minecraft = Minecraft.getInstance();
+        ModConfig config = ModConfig.get();
+        boolean isCrosshair = ModConfig.CROSSHAIR_PATH.equals(sprite.getPath());
+        ModConfig.AttackStyle style = isCrosshair ? config.resolveAttackStyle(minecraft) : null;
+        // In override mode the attack style replaces the vanilla crosshair completely.
+        boolean override = style != null && config.isAttackStyleOverride();
+
+        if (!override) {
+            int color = resolveColor(sprite);
+            if (color == ModConfig.VANILLA) {
+                graphics.blitSprite(pipeline, sprite, x, y, width, height);
+            } else {
+                graphics.blitSprite(RenderPipelines.GUI_TEXTURED, sprite, x, y, width, height, color);
             }
+        }
+
+        if (style != null) {
+            // Attack style markers, drawn on top of (decorate) or instead of (override) the crosshair.
+            CrosshairStyles.drawMarkers(graphics, x, y, width, height, style.color(),
+                    style.crit(), style.knockback(), style.sweep(), override);
         }
     }
 

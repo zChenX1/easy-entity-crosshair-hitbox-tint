@@ -103,6 +103,7 @@ public final class ModConfig {
     boolean attackStyleSweep = true;
     String attackStyleColor = DEFAULT_COLOR;
     int attackStyleRgb = DEFAULT_RGB;
+    boolean attackStyleOverride = false;
 
     /** The markers to draw around the crosshair, resolved once per frame. */
     public record AttackStyle(int color, boolean crit, boolean knockback, boolean sweep) {
@@ -153,6 +154,7 @@ public final class ModConfig {
         copy.attackStyleSweep = instance.attackStyleSweep;
         copy.attackStyleColor = instance.attackStyleColor;
         copy.attackStyleRgb = instance.attackStyleRgb;
+        copy.attackStyleOverride = instance.attackStyleOverride;
         return copy;
     }
 
@@ -336,6 +338,11 @@ public final class ModConfig {
     /** Whether the aimed entity's hitbox is drawn even while vanilla's hitbox display (F3+B) is off. */
     public boolean isHitboxAlwaysShow() {
         return hitboxAlwaysShow;
+    }
+
+    /** Whether the attack style replaces the vanilla crosshair instead of decorating it. */
+    public boolean isAttackStyleOverride() {
+        return attackStyleOverride;
     }
 
     /** Opens the TOML file in the system editor (Notepad on Windows), creating it if needed. */
@@ -562,6 +569,7 @@ public final class ModConfig {
         config.attackStyleSweep = getBoolean(json, "attack_style_sweep", true);
         config.attackStyleColor = getString(json, "attack_style_color", DEFAULT_COLOR);
         config.attackStyleRgb = parseColor(config.attackStyleColor) & 0xFFFFFF;
+        config.attackStyleOverride = "override".equalsIgnoreCase(getString(json, "attack_style_mode", "decorate"));
         return config;
     }
 
@@ -594,6 +602,8 @@ public final class ModConfig {
         sb.append("# 鐤捐窇鍑婚€€鏀诲嚮锛氬噯鏄熶笂鏂瑰嚭鐜?^\nattack_style_knockback = ").append(c.attackStyleKnockback).append('\n');
         sb.append("# 妯壂鏀诲嚮锛氬噯鏄熶笅鏂瑰嚭鐜板崐寮nattack_style_sweep = ").append(c.attackStyleSweep).append('\n');
         sb.append("# 鏀诲嚮鏍峰紡鐨勯鑹诧紙#RRGGBB 鎴?#AARRGGBB锛塡nattack_style_color = ").append(quote(c.attackStyleColor)).append('\n');
+        sb.append("# mode: decorate = draw the markers around the crosshair (default); override = replace the crosshair\nattack_style_mode = ") 
+                .append(quote(c.attackStyleOverride ? "override" : "decorate")).append('\n');
 
         sb.append("\n# ===== 纰版挒绠?=====\n");
         sb.append("# 鐬勫噯瀹炰綋鏃舵槸鍚︾粰瀹冪殑纰版挒绠辨煋鑹瞈nhitbox_enabled = ").append(c.hitboxEnabled).append('\n');
