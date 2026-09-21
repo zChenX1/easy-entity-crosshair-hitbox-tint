@@ -172,6 +172,7 @@ public class ConfigScreen extends Screen {
     private int scrollbarTop;
     private int scrollbarHeight;
     private boolean draggingScrollbar;
+    private boolean justSaved;
 
     public ConfigScreen(Screen parent) {
         super(Component.literal("Easy Crosshair & Hitbox Tint"));
@@ -207,7 +208,10 @@ public class ConfigScreen extends Screen {
         int labelX = (this.width - totalWidth) / 2;
         int controlX = labelX + labelWidth + COLUMN_GAP;
 
-        addRenderableWidget(new StringWidget(labelX, 4, totalWidth, 12, Component.literal(this.title.getString()), this.font));
+        // the title is drawn centred in extractRenderState
+        if (justSaved) {
+            // (placeholder handled below)
+        }
 
         int last = Math.min(totalRows, scrollRow + visibleRows);
         for (int i = scrollRow; i < last; i++) {
@@ -227,7 +231,7 @@ public class ConfigScreen extends Screen {
             readFields();
             page = index;
             scrollRow = 0;
-            rebuildWidgets();
+            requestRebuild();
         }));
 
         // ---- preview (below the list, only when there is room) ----
@@ -246,8 +250,19 @@ public class ConfigScreen extends Screen {
                 .bounds(barX, buttonY, buttonWidth, 18).build());
         saveButton = addRenderableWidget(Button.builder(Component.literal("保存"), b -> save())
                 .bounds(barX + buttonWidth + 4, buttonY, buttonWidth, 18).build());
+        if (justSaved) { saveButton.setMessage(Component.literal("§a已保存")); }
         addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, b -> onClose())
                 .bounds(barX + (buttonWidth + 4) * 2, buttonY, buttonWidth, 18).build());
+    }
+
+    /** Rebuilds the widgets on the next client tick (never during an event dispatch). */
+    private void requestRebuild() {
+        Minecraft minecraft = this.minecraft;
+        if (minecraft == null) {
+            rebuildWidgets();
+        } else {
+            minecraft.execute(this::rebuildWidgets);
+        }
     }
 
     private void clearBoxHolders() {
@@ -386,7 +401,7 @@ public class ConfigScreen extends Screen {
         }
         readFields();
         scrollRow = next;
-        rebuildWidgets();
+        requestRebuild();
     }
 
     private void scrollToMouse(double mouseY) {
@@ -403,7 +418,7 @@ public class ConfigScreen extends Screen {
         }
         readFields();
         scrollRow = next;
-        rebuildWidgets();
+        requestRebuild();
     }
 
     private int thumbHeight() {
@@ -445,10 +460,8 @@ public class ConfigScreen extends Screen {
         readFields();
         ModConfig.save(config);
         config = ModConfig.copy();
-        rebuildWidgets();
-        if (saveButton != null) {
-            saveButton.setMessage(Component.literal("§a已保存"));
-        }
+        justSaved = true;
+        requestRebuild();
     }
 
     private static List<String> parseList(String value) {
@@ -473,6 +486,7 @@ public class ConfigScreen extends Screen {
     @Override
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+        graphics.centeredText(this.font, this.title, this.width / 2, 5, 0xFFFFFFFF);
 
         if (scrollable) {
             // Vanilla scroll bar sprites (widget/scroller + widget/scroller_background).
