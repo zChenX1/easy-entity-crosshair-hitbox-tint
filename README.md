@@ -15,7 +15,7 @@ Minecraft **26.3**（Fabric）客户端模组：准星着色、瞄准实体碰�
 | `hitbox_line_width` | 碰撞箱线条粗细（原版为 `2.5`），可用 `0.5` ~ `8.0` | `2.5` |
 | `attack_indicator_enabled` | 攻击指示器（准星下方的攻击冷却显示）染色开关 | `false` |
 | `attack_indicator_color` | 攻击指示器染色（`#RRGGBB` 或 `#AARRGGBB`） | `#FF0000`（红） |
-| `attack_indicator_threshold` | 攻击冷却达到该比例才染色，`0.885` = 88.5%（也可直接写 `88.5`） | `0.885` |
+| `attack_indicator_threshold` | 攻击冷却达到该比例且瞄准到生效实体才染色, 0.885 = 88.5%（也可直接写 88.5） | `0.885` |
 | `attack_style_enabled` | 攻击准星样式总开关（需瞄准到攻击范围内的实体才显示） | `false` |
 | `attack_style_crit` | 暴击：准星四角出现**虚斜线** | `true` |
 | `attack_style_knockback` | 疾跑击退攻击：准星上方出现 **`^`** | `true` |

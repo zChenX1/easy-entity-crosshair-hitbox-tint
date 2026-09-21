@@ -299,6 +299,10 @@ public final class ModConfig {
         if (!(charge >= attackIndicatorThreshold)) {
             return VANILLA;
         }
+        // Only while actually aiming at a matching entity within attack range.
+        if (!isAimingAtTarget(minecraft)) {
+            return VANILLA;
+        }
         return 0xFF000000 | attackIndicatorRgb;
     }
 

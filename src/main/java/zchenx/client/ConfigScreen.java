@@ -6,31 +6,61 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.StringWidget;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 /**
  * The in-game config screen used by Mod Menu.
  *
- * <p>Options are grouped into the three pages 准星 / 碰撞箱 / 攻击指示器, and the crosshair page shows a
- * live preview of the attack style markers. Only vanilla widgets are used, so no config library is
- * needed, and saving writes the TOML file immediately.
+ * <p>Options are grouped into the three pages 准星 / 碰撞箱 / 攻击指示器; the crosshair page also shows a
+ * live preview of the attack style markers. The layout adapts to the current GUI size: the two columns
+ * are scaled to fit the window, and when the rows do not fit on screen the list becomes scrollable
+ * (mouse wheel, or drag the scroll bar on the right) instead of overlapping itself or the buttons.
  */
 public class ConfigScreen extends Screen {
     private static final int LABEL_WIDTH = 160;
     private static final int CONTROL_WIDTH = 150;
     private static final int TAB_HEIGHT = 18;
+    private static final int MARGIN = 8;
+    private static final int COLUMN_GAP = 4;
+    private static final int MIN_SLOT_HEIGHT = 10;
+    private static final int MAX_SLOT_HEIGHT = 20;
+    private static final int PREVIEW_HEIGHT = 52;
+    private static final int SCROLLBAR_WIDTH = 6;
     private static final String[] TABS = {"准星", "碰撞箱", "攻击指示器"};
+
+    private enum Kind { HEADER, TOGGLE, EDIT, MODE }
+
+    private record Row(Kind kind, String text, String value, int maxLength,
+                       BooleanSupplier getter, Consumer<Boolean> setter, Consumer<EditBox> holder) {
+        static Row header(String text) {
+            return new Row(Kind.HEADER, text, null, 0, null, null, null);
+        }
+
+        static Row toggle(String text, BooleanSupplier getter, Consumer<Boolean> setter) {
+            return new Row(Kind.TOGGLE, text, null, 0, getter, setter, null);
+        }
+
+        static Row edit(String text, String value, int maxLength, Consumer<EditBox> holder) {
+            return new Row(Kind.EDIT, text, value, maxLength, null, null, holder);
+        }
+
+        static Row mode(String text, BooleanSupplier getter, Consumer<Boolean> setter) {
+            return new Row(Kind.MODE, text, null, 0, getter, setter, null);
+        }
+    }
 
     private final Screen parent;
     private ModConfig config;
     private int page;
 
-    // rows whose value lives in a text box (only the widgets of the current page exist)
+    // rows whose value lives in a text box (only the widgets of the visible rows exist)
     private EditBox opacityBox;
     private EditBox targetColorBox;
     private EditBox entitiesBox;
@@ -42,10 +72,22 @@ public class ConfigScreen extends Screen {
     private EditBox attackThresholdBox;
 
     private Button saveButton;
+
     private int previewX = -1;
     private int previewY;
     private int previewWidth;
     private int previewHeight;
+
+    // scrolling state
+    private int scrollRow;
+    private int totalRows;
+    private int visibleRows;
+    private int slotHeight;
+    private boolean scrollable;
+    private int scrollbarX;
+    private int scrollbarTop;
+    private int scrollbarHeight;
+    private boolean draggingScrollbar;
 
     public ConfigScreen(Screen parent) {
         super(Component.literal("Easy Crosshair & Hitbox Tint"));
@@ -55,6 +97,80 @@ public class ConfigScreen extends Screen {
 
     @Override
     protected void init() {
+        clearBoxHolders();
+        previewX = -1;
+        draggingScrollbar = false;
+
+        int contentTop = 42;
+        int contentBottom = this.height - 28;
+        int contentHeight = Math.max(20, contentBottom - contentTop);
+
+        previewHeight = (page == 0 && this.width >= 200 && contentHeight >= 130) ? PREVIEW_HEIGHT : 0;
+        int viewportHeight = contentHeight - previewHeight;
+
+        List<Row> rows = rows();
+        totalRows = rows.size();
+        slotHeight = Math.max(MIN_SLOT_HEIGHT, Math.min(MAX_SLOT_HEIGHT, viewportHeight / 6));
+        visibleRows = Math.max(1, Math.min(totalRows, viewportHeight / slotHeight));
+        scrollable = totalRows > visibleRows;
+        scrollRow = Math.max(0, Math.min(scrollRow, totalRows - visibleRows));
+
+        // Columns, leaving room for the scroll bar when it is shown.
+        int maxTotal = Math.max(80, this.width - 2 * MARGIN - (scrollable ? SCROLLBAR_WIDTH + 4 : 0));
+        int labelWidth = Math.min(LABEL_WIDTH, Math.max(36, (maxTotal - COLUMN_GAP) / 2));
+        int controlWidth = Math.min(CONTROL_WIDTH, Math.max(36, maxTotal - COLUMN_GAP - labelWidth));
+        int totalWidth = labelWidth + COLUMN_GAP + controlWidth;
+        int labelX = (this.width - totalWidth) / 2;
+        int controlX = labelX + labelWidth + COLUMN_GAP;
+
+        addRenderableWidget(new StringWidget(labelX, 4, totalWidth, 12, Component.literal(this.title.getString()), this.font));
+
+        int last = Math.min(totalRows, scrollRow + visibleRows);
+        for (int i = scrollRow; i < last; i++) {
+            buildRow(rows.get(i), labelX, labelWidth, controlX, controlWidth,
+                    contentTop + (i - scrollRow) * slotHeight, slotHeight);
+        }
+
+        scrollbarX = this.width - MARGIN - SCROLLBAR_WIDTH;
+        scrollbarTop = contentTop;
+        scrollbarHeight = viewportHeight;
+
+        // ---- tabs ----
+        int tabWidth = Math.min(110, Math.max(40, (this.width - 2 * MARGIN - 8) / TABS.length));
+        int tabX = this.width / 2 - (tabWidth * TABS.length + 4 * (TABS.length - 1)) / 2;
+        for (int i = 0; i < TABS.length; i++) {
+            int target = i;
+            Button tab = addRenderableWidget(Button.builder(Component.literal(TABS[i]), b -> {
+                readFields();
+                page = target;
+                scrollRow = 0;
+                rebuildWidgets();
+            }).bounds(tabX + i * (tabWidth + 4), 22, tabWidth, TAB_HEIGHT).build());
+            tab.active = page != i;
+        }
+
+        // ---- preview (below the list, only when there is room) ----
+        if (previewHeight > 0) {
+            previewWidth = Math.min(170, this.width - 2 * MARGIN);
+            previewX = this.width / 2 - previewWidth / 2;
+            previewY = contentBottom - previewHeight;
+        }
+
+        // ---- bottom bar ----
+        int buttonCount = 3;
+        int buttonWidth = Math.min(110, Math.max(28, (this.width - 2 * MARGIN - 4 * (buttonCount - 1)) / buttonCount));
+        int barWidth = buttonWidth * buttonCount + 4 * (buttonCount - 1);
+        int barX = Math.max(MARGIN, this.width / 2 - barWidth / 2);
+        int buttonY = this.height - 22;
+        addRenderableWidget(Button.builder(Component.literal("TOML"), b -> ModConfig.openConfigFile())
+                .bounds(barX, buttonY, buttonWidth, 18).build());
+        saveButton = addRenderableWidget(Button.builder(Component.literal("保存"), b -> save())
+                .bounds(barX + buttonWidth + 4, buttonY, buttonWidth, 18).build());
+        addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, b -> onClose())
+                .bounds(barX + (buttonWidth + 4) * 2, buttonY, buttonWidth, 18).build());
+    }
+
+    private void clearBoxHolders() {
         opacityBox = null;
         targetColorBox = null;
         entitiesBox = null;
@@ -64,128 +180,155 @@ public class ConfigScreen extends Screen {
         hitboxWidthBox = null;
         attackColorBox = null;
         attackThresholdBox = null;
-        previewX = -1;
+    }
 
-        int labelX = this.width / 2 - 162;
-        int controlX = this.width / 2 + 12;
-
-        addRenderableWidget(new StringWidget(labelX, 6, 320, 14, this.title, this.font));
-
-        int tabWidth = Math.min(110, (this.width - 40) / TABS.length);
-        int tabX = this.width / 2 - (tabWidth * TABS.length + 4 * (TABS.length - 1)) / 2;
-        for (int i = 0; i < TABS.length; i++) {
-            int target = i;
-            Button tab = addRenderableWidget(Button.builder(Component.literal(TABS[i]), b -> {
-                readFields();
-                page = target;
-                rebuildWidgets();
-            }).bounds(tabX + i * (tabWidth + 4), 22, tabWidth, TAB_HEIGHT).build());
-            // The selected tab is rendered as an inactive button.
-            tab.active = page != i;
-        }
-
-        int contentTop = 46;
-        int contentBottom = this.height - 30;
-        int slots = slotCount();
-        int previewReserve = (page == 0 && contentBottom - contentTop >= slots * 12 + 58) ? 58 : 0;
-        int slotHeight = Math.max(11, Math.min(20, (contentBottom - contentTop - previewReserve) / Math.max(1, slots)));
-        int y = contentTop;
-
+    private List<Row> rows() {
+        List<Row> rows = new ArrayList<>();
         switch (page) {
             case 0 -> {
-                y = header(labelX, y, slotHeight, "准星样式");
-                y = toggleRow(labelX, controlX, y, slotHeight, "准星瞄准实体变色", config.enabled, v -> config.enabled = v);
-                y = editRow(labelX, controlX, y, slotHeight, "准星透明度 (0.0-1.0)", box -> opacityBox = box, Float.toString(config.opacity), 16);
-                y = editRow(labelX, controlX, y, slotHeight, "准星颜色 (#RRGGBB)", box -> targetColorBox = box, config.targetColor, 16);
-                y = editRow(labelX, controlX, y, slotHeight, "生效实体 (逗号分隔，空=任意)", box -> entitiesBox = box, String.join(", ", config.targetEntities), 512);
-                y += 2;
-                y = header(labelX, y, slotHeight, "攻击准星样式");
-                y = toggleRow(labelX, controlX, y, slotHeight, "攻击样式总开关", config.attackStyleEnabled, v -> config.attackStyleEnabled = v);
-                y = toggleRow(labelX, controlX, y, slotHeight, "暴击 · 四角虚斜线", config.attackStyleCrit, v -> config.attackStyleCrit = v);
-                y = toggleRow(labelX, controlX, y, slotHeight, "疾跑击退 · 上方 ^", config.attackStyleKnockback, v -> config.attackStyleKnockback = v);
-                y = toggleRow(labelX, controlX, y, slotHeight, "横扫 · 下方半弧", config.attackStyleSweep, v -> config.attackStyleSweep = v);
-                editRow(labelX, controlX, y, slotHeight, "攻击样式颜色 (#RRGGBB)", box -> attackStyleColorBox = box, config.attackStyleColor, 16);
-                modeRow(labelX, controlX, y, slotHeight);
+                rows.add(Row.header("准星样式"));
+                rows.add(Row.toggle("准星瞄准实体变色", () -> config.enabled, v -> config.enabled = v));
+                rows.add(Row.edit("准星透明度 (0.0-1.0)", Float.toString(config.opacity), 16, box -> opacityBox = box));
+                rows.add(Row.edit("准星颜色 (#RRGGBB)", config.targetColor, 16, box -> targetColorBox = box));
+                rows.add(Row.edit("生效实体 (逗号分隔，空=任意)", String.join(", ", config.targetEntities), 512, box -> entitiesBox = box));
+                rows.add(Row.header("攻击准星样式"));
+                rows.add(Row.toggle("攻击样式总开关", () -> config.attackStyleEnabled, v -> config.attackStyleEnabled = v));
+                rows.add(Row.toggle("暴击 · 四角虚斜线", () -> config.attackStyleCrit, v -> config.attackStyleCrit = v));
+                rows.add(Row.toggle("疾跑击退 · 上方 ^", () -> config.attackStyleKnockback, v -> config.attackStyleKnockback = v));
+                rows.add(Row.toggle("横扫 · 下方半弧", () -> config.attackStyleSweep, v -> config.attackStyleSweep = v));
+                rows.add(Row.edit("攻击样式颜色 (#RRGGBB)", config.attackStyleColor, 16, box -> attackStyleColorBox = box));
+                rows.add(Row.mode("攻击样式模式", () -> config.attackStyleOverride, v -> config.attackStyleOverride = v));
             }
             case 1 -> {
-                y = header(labelX, y, slotHeight, "瞄准碰撞箱");
-                y = toggleRow(labelX, controlX, y, slotHeight, "碰撞箱着色", config.hitboxEnabled, v -> config.hitboxEnabled = v);
-                y = toggleRow(labelX, controlX, y, slotHeight, "无 F3+B 也显示碰撞箱", config.hitboxAlwaysShow, v -> config.hitboxAlwaysShow = v);
-                y = editRow(labelX, controlX, y, slotHeight, "碰撞箱颜色 (#RRGGBB)", box -> hitboxColorBox = box, config.hitboxColor, 16);
-                y = editRow(labelX, controlX, y, slotHeight, "碰撞箱透明度 (0.0-1.0)", box -> hitboxOpacityBox = box, Float.toString(config.hitboxOpacity), 16);
-                editRow(labelX, controlX, y, slotHeight, "碰撞箱线宽 (0.5-8.0)", box -> hitboxWidthBox = box, Float.toString(config.hitboxLineWidth), 16);
+                rows.add(Row.header("瞄准碰撞箱"));
+                rows.add(Row.toggle("碰撞箱着色", () -> config.hitboxEnabled, v -> config.hitboxEnabled = v));
+                rows.add(Row.toggle("无 F3+B 也显示碰撞箱", () -> config.hitboxAlwaysShow, v -> config.hitboxAlwaysShow = v));
+                rows.add(Row.edit("碰撞箱颜色 (#RRGGBB)", config.hitboxColor, 16, box -> hitboxColorBox = box));
+                rows.add(Row.edit("碰撞箱透明度 (0.0-1.0)", Float.toString(config.hitboxOpacity), 16, box -> hitboxOpacityBox = box));
+                rows.add(Row.edit("碰撞箱线宽 (0.5-8.0)", Float.toString(config.hitboxLineWidth), 16, box -> hitboxWidthBox = box));
             }
             default -> {
-                y = header(labelX, y, slotHeight, "指示器蓄力");
-                y = toggleRow(labelX, controlX, y, slotHeight, "攻击指示器染色", config.attackIndicatorEnabled, v -> config.attackIndicatorEnabled = v);
-                y = editRow(labelX, controlX, y, slotHeight, "指示器颜色 (#RRGGBB)", box -> attackColorBox = box, config.attackIndicatorColor, 16);
-                editRow(labelX, controlX, y, slotHeight, "触发阈值 (0.885 = 88.5%)", box -> attackThresholdBox = box, Float.toString(config.attackIndicatorThreshold), 16);
+                rows.add(Row.header("指示器蓄力"));
+                rows.add(Row.toggle("攻击指示器染色", () -> config.attackIndicatorEnabled, v -> config.attackIndicatorEnabled = v));
+                rows.add(Row.edit("指示器颜色 (#RRGGBB)", config.attackIndicatorColor, 16, box -> attackColorBox = box));
+                rows.add(Row.edit("触发阈值 (0.885 = 88.5%)", Float.toString(config.attackIndicatorThreshold), 16, box -> attackThresholdBox = box));
             }
         }
+        return rows;
+    }
 
-        if (previewReserve > 0) {
-            previewWidth = Math.min(170, Math.max(110, this.width / 3));
-            previewHeight = 52;
-            previewX = this.width / 2 - previewWidth / 2;
-            previewY = contentBottom - previewHeight;
+    private void buildRow(Row row, int labelX, int labelWidth, int controlX, int controlWidth, int y, int slotHeight) {
+        int height = Math.max(8, slotHeight - 4);
+        if (row.kind() == Kind.HEADER) {
+            addRenderableWidget(new StringWidget(labelX, y, labelWidth + controlWidth, height, Component.literal("§e§l" + row.text()), this.font));
+            return;
         }
 
-        int buttonY = this.height - 24;
-        int third = Math.min(120, this.width / 3 - 6);
-        int baseX = this.width / 2 - (third * 3 + 8) / 2;
-        addRenderableWidget(Button.builder(Component.literal("打开 TOML"), b -> ModConfig.openConfigFile())
-                .bounds(baseX, buttonY, third, 18).build());
-        saveButton = addRenderableWidget(Button.builder(Component.literal("保存"), b -> save())
-                .bounds(baseX + third + 4, buttonY, third, 18).build());
-        addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, b -> onClose())
-                .bounds(baseX + (third + 4) * 2, buttonY, third, 18).build());
-    }
+        addRenderableWidget(new StringWidget(labelX, y, labelWidth, height, Component.literal(row.text()), this.font));
 
-    private int slotCount() {
-        return switch (page) {
-            case 0 -> 12;
-            case 1 -> 6;
-            default -> 4;
-        };
-    }
-
-    private int header(int labelX, int y, int slotHeight, String title) {
-        addRenderableWidget(new StringWidget(labelX, y, LABEL_WIDTH, slotHeight - 4, Component.literal("§e§l" + title), this.font));
-        return y + slotHeight;
-    }
-
-    private int toggleRow(int labelX, int controlX, int y, int slotHeight, String label, boolean value, Consumer<Boolean> setter) {
-        addRenderableWidget(new StringWidget(labelX, y, LABEL_WIDTH, slotHeight - 4, Component.literal(label), this.font));
-        addRenderableWidget(Button.builder(toggleLabel(value), b -> {
-            readFields();
-            setter.accept(!value);
-            rebuildWidgets();
-        }).bounds(controlX, y - 1, CONTROL_WIDTH, slotHeight - 4).build());
-        return y + slotHeight;
-    }
-
-    private int editRow(int labelX, int controlX, int y, int slotHeight, String label, Consumer<EditBox> holder, String value, int maxLength) {
-        addRenderableWidget(new StringWidget(labelX, y, LABEL_WIDTH, slotHeight - 4, Component.literal(label), this.font));
-        EditBox box = new EditBox(this.font, controlX, y - 1, CONTROL_WIDTH, slotHeight - 4, Component.literal(label));
-        box.setMaxLength(maxLength);
-        box.setValue(value == null ? "" : value);
-        holder.accept(box);
-        addRenderableWidget(box);
-        return y + slotHeight;
-    }
-
-    private int modeRow(int labelX, int controlX, int y, int slotHeight) {
-        addRenderableWidget(new StringWidget(labelX, y, LABEL_WIDTH, slotHeight - 4, Component.literal("攻击样式模式"), this.font));
-        addRenderableWidget(Button.builder(Component.literal(config.attackStyleOverride ? "覆盖模式" : "装饰模式"), b -> {
-            readFields();
-            config.attackStyleOverride = !config.attackStyleOverride;
-            rebuildWidgets();
-        }).bounds(controlX, y - 1, CONTROL_WIDTH, slotHeight - 4).build());
-        return y + slotHeight;
+        switch (row.kind()) {
+            case TOGGLE -> addRenderableWidget(Button.builder(toggleLabel(row.getter().getAsBoolean()), b -> {
+                readFields();
+                row.setter().accept(!row.getter().getAsBoolean());
+                rebuildWidgets();
+            }).bounds(controlX, y - 1, controlWidth, height).build());
+            case MODE -> addRenderableWidget(Button.builder(modeLabel(row.getter().getAsBoolean()), b -> {
+                readFields();
+                row.setter().accept(!row.getter().getAsBoolean());
+                rebuildWidgets();
+            }).bounds(controlX, y - 1, controlWidth, height).build());
+            case EDIT -> {
+                EditBox box = new EditBox(this.font, controlX, y - 1, controlWidth, height, Component.literal(row.text()));
+                box.setMaxLength(row.maxLength());
+                box.setValue(row.value() == null ? "" : row.value());
+                row.holder().accept(box);
+                addRenderableWidget(box);
+            }
+            default -> {
+            }
+        }
     }
 
     private static Component toggleLabel(boolean value) {
         return Component.literal(value ? "§a开" : "§c关");
+    }
+
+    private static Component modeLabel(boolean override) {
+        return Component.literal(override ? "§b覆盖模式" : "§b装饰模式");
+    }
+
+    // ------------------------------------------------------------------ scrolling
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (scrollable && scrollY != 0.0) {
+            scrollBy(scrollY > 0.0 ? -1 : 1);
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+    }
+
+    @Override
+    public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+        if (scrollable && event.button() == 0
+                && event.x() >= scrollbarX - 2 && event.x() <= scrollbarX + SCROLLBAR_WIDTH + 2
+                && event.y() >= scrollbarTop && event.y() <= scrollbarTop + scrollbarHeight) {
+            draggingScrollbar = true;
+            scrollToMouse(event.y());
+            return true;
+        }
+        return super.mouseClicked(event, doubleClick);
+    }
+
+    @Override
+    public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
+        if (draggingScrollbar) {
+            scrollToMouse(event.y());
+            return true;
+        }
+        return super.mouseDragged(event, dragX, dragY);
+    }
+
+    @Override
+    public boolean mouseReleased(MouseButtonEvent event) {
+        if (draggingScrollbar) {
+            draggingScrollbar = false;
+            return true;
+        }
+        return super.mouseReleased(event);
+    }
+
+    private void scrollBy(int rows) {
+        int maxRow = Math.max(0, totalRows - visibleRows);
+        int next = Math.max(0, Math.min(maxRow, scrollRow + rows));
+        if (next == scrollRow) {
+            return;
+        }
+        readFields();
+        scrollRow = next;
+        rebuildWidgets();
+    }
+
+    private void scrollToMouse(double mouseY) {
+        int maxRow = Math.max(0, totalRows - visibleRows);
+        if (maxRow == 0) {
+            return;
+        }
+        int thumbHeight = thumbHeight();
+        int travel = scrollbarHeight - thumbHeight;
+        double ratio = travel <= 0 ? 0.0 : (mouseY - scrollbarTop - thumbHeight / 2.0) / travel;
+        int next = (int) Math.round(Math.max(0.0, Math.min(1.0, ratio)) * maxRow);
+        if (next == scrollRow) {
+            return;
+        }
+        readFields();
+        scrollRow = next;
+        rebuildWidgets();
+    }
+
+    private int thumbHeight() {
+        int height = (int) ((long) scrollbarHeight * visibleRows / Math.max(1, totalRows));
+        return Math.max(12, Math.min(scrollbarHeight, height));
     }
 
     private void readFields() {
@@ -250,6 +393,16 @@ public class ConfigScreen extends Screen {
     @Override
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+
+        if (scrollable) {
+            int trackColor = draggingScrollbar ? 0xA0FFFFFF : 0x60FFFFFF;
+            graphics.fill(scrollbarX, scrollbarTop, scrollbarX + SCROLLBAR_WIDTH, scrollbarTop + scrollbarHeight, 0x60000000);
+            int thumbHeight = thumbHeight();
+            int maxRow = Math.max(1, totalRows - visibleRows);
+            int thumbY = scrollbarTop + (int) ((long) (scrollbarHeight - thumbHeight) * scrollRow / maxRow);
+            graphics.fill(scrollbarX, thumbY, scrollbarX + SCROLLBAR_WIDTH, thumbY + thumbHeight, trackColor);
+        }
+
         if (previewX < 0) {
             return;
         }
@@ -259,13 +412,12 @@ public class ConfigScreen extends Screen {
 
         int centerX = previewX + previewWidth / 2;
         int centerY = previewY + previewHeight / 2 + 2;
-        // Vanilla-like crosshair for reference.
         boolean override = config.attackStyleEnabled && config.attackStyleOverride;
         if (!override) {
+            // Vanilla-like crosshair for reference.
             graphics.fill(centerX, centerY - 5, centerX + 1, centerY + 6, 0xFFFFFFFF);
             graphics.fill(centerX - 5, centerY, centerX + 6, centerY + 1, 0xFFFFFFFF);
         }
-        // Attack style markers, using the values currently typed in the boxes.
         if (config.attackStyleEnabled) {
             String raw = attackStyleColorBox != null ? attackStyleColorBox.getValue() : config.attackStyleColor;
             int color = 0xFF000000 | (ModConfig.parseColor(raw) & 0xFFFFFF);
