@@ -71,12 +71,14 @@ public class ConfigScreen extends Screen {
                 Identifier.withDefaultNamespace("widget/tab_highlighted"));
 
         private final int tabWidth;
+        private final int screenWidth;
         private final int selected;
         private final IntConsumer onSelect;
 
-        TabBar(int x, int y, int tabWidth, int selected, IntConsumer onSelect) {
+        TabBar(int x, int y, int tabWidth, int screenWidth, int selected, IntConsumer onSelect) {
             super(x, y, tabWidth * TABS.length, TAB_HEIGHT, Component.literal(TABS[selected]));
             this.tabWidth = tabWidth;
+            this.screenWidth = screenWidth;
             this.selected = selected;
             this.onSelect = onSelect;
         }
@@ -84,6 +86,17 @@ public class ConfigScreen extends Screen {
         @Override
         protected void extractWidgetRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
             Font font = Minecraft.getInstance().font;
+            // The vanilla menu header bar runs along the whole screen behind the tabs (MenuTabBar).
+            int separatorY = this.getY() + this.getHeight() - 2;
+            int tabsEnd = this.getX() + tabWidth * TABS.length;
+            if (this.getX() > 0) {
+                graphics.blit(RenderPipelineTabs.GUI_TEXTURED, Screen.HEADER_SEPARATOR, 0, separatorY,
+                        0.0F, 0.0F, this.getX(), 2, 32, 2);
+            }
+            if (tabsEnd < screenWidth) {
+                graphics.blit(RenderPipelineTabs.GUI_TEXTURED, Screen.HEADER_SEPARATOR, tabsEnd, separatorY,
+                        0.0F, 0.0F, screenWidth - tabsEnd, 2, 32, 2);
+            }
             for (int i = 0; i < TABS.length; i++) {
                 int tabX = this.getX() + i * tabWidth;
                 boolean isSelected = i == selected;
@@ -227,7 +240,7 @@ public class ConfigScreen extends Screen {
         int tabWidth = Math.max(40, (Math.min(400, this.width) - 16) / TABS.length / 2 * 2);
         int tabsWidth = tabWidth * TABS.length;
         int tabX = Math.max(MARGIN, (this.width - tabsWidth) / 2);
-        addRenderableWidget(new TabBar(tabX, 20, tabWidth, page, index -> {
+        addRenderableWidget(new TabBar(tabX, 20, tabWidth, this.width, page, index -> {
             readFields();
             page = index;
             scrollRow = 0;
