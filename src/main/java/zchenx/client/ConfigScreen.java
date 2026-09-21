@@ -13,6 +13,8 @@ import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -40,6 +42,7 @@ public class ConfigScreen extends Screen {
     private static final int SCROLLBAR_WIDTH = 6;
     private static final int SCROLLBAR_MIN_HEIGHT = 32;
     private static final String[] TABS = {"准星", "碰撞箱", "攻击指示器"};
+    private static final Logger LOGGER = LoggerFactory.getLogger("easy_entity_crosshair_hitbox_tint");
 
     private enum Kind { HEADER, TOGGLE, EDIT, MODE }
 
@@ -112,7 +115,11 @@ public class ConfigScreen extends Screen {
                 }
                 Component label = Component.literal(TABS[i]);
                 int color = isSelected ? 0xFFFFFFFF : (hovered ? 0xFFFFFFFF : 0xFFB0B0B0);
-                graphics.centeredText(font, label, tabX + tabWidth / 2, this.getY() + (isSelected ? 5 : 7), color);
+                // Vanilla MenuTabBar centres the label between y (+0 selected / +3 unselected) and the bottom.
+                int labelTop = this.getY() + (isSelected ? 0 : 3);
+                int labelBottom = this.getY() + this.getHeight();
+                int textY = labelTop + (labelBottom - labelTop - font.lineHeight) / 2;
+                graphics.centeredText(font, label, tabX + tabWidth / 2, textY, color);
                 if (isSelected && this.active) {
                     int underlineWidth = Math.min(font.width(label), tabWidth - 4);
                     int underlineLeft = tabX + (tabWidth - underlineWidth) / 2;
@@ -122,8 +129,15 @@ public class ConfigScreen extends Screen {
             }
         }
 
-        @Override
-        public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+        /**
+         * Tab clicks are handled by the screen itself (see {@link ConfigScreen#mouseClicked}), so that
+         * another widget overlapping the strip can never swallow them.
+         */
+        boolean contains(double x, double y) {
+            return x >= this.getX() && x < this.getRight() && y >= this.getY() && y < this.getBottom();
+        }
+
+        boolean handleClick(MouseButtonEvent event) {
             if (event.button() != 0 || !this.active) {
                 return false;
             }
@@ -136,6 +150,17 @@ public class ConfigScreen extends Screen {
                 onSelect.accept(index);
             }
             return true;
+        }
+
+        /** Also handles the click when the vanilla child dispatch reaches the strip. */
+        @Override
+        public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+            return handleClick(event);
+        }
+
+        @Override
+        public void playDownSound(net.minecraft.client.sounds.SoundManager soundManager) {
+            // Vanilla tab buttons are silent; a stray click sound only confuses.
         }
 
         @Override
@@ -186,6 +211,7 @@ public class ConfigScreen extends Screen {
     private int scrollbarHeight;
     private boolean draggingScrollbar;
     private boolean justSaved;
+    private TabBar tabBar;
 
     public ConfigScreen(Screen parent) {
         super(Component.literal("Easy Crosshair & Hitbox Tint"));
@@ -240,12 +266,16 @@ public class ConfigScreen extends Screen {
         int tabWidth = Math.max(40, (Math.min(400, this.width) - 16) / TABS.length / 2 * 2);
         int tabsWidth = tabWidth * TABS.length;
         int tabX = Math.max(MARGIN, (this.width - tabsWidth) / 2);
-        addRenderableWidget(new TabBar(tabX, 20, tabWidth, this.width, page, index -> {
+        tabBar = new TabBar(tabX, 20, tabWidth, this.width, page, index -> {
+            LOGGER.info("[EasyCrosshairHitboxTint] config screen: tab clicked -> {}", index);
             readFields();
             page = index;
             scrollRow = 0;
             requestRebuild();
-        }));
+        });
+        addRenderableWidget(tabBar);
+        LOGGER.info("[EasyCrosshairHitboxTint] config screen build: tab strip x={} y={} w={} h={} (screen {}x{})",
+                tabX, 20, tabWidth * TABS.length, TAB_HEIGHT, this.width, this.height);
 
         // ---- preview (below the list, only when there is room) ----
         if (previewHeight > 0) {
@@ -378,6 +408,16 @@ public class ConfigScreen extends Screen {
 
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+        // Handled here first: independent of the vanilla child dispatch (getChildAt), which another
+        // widget drawn over the tab strip could otherwise steal.
+        var topWidget = getChildAt(event.x(), event.y());
+        LOGGER.info("[EasyCrosshairHitboxTint] config click at ({}, {}) -> widget {}, insideTabStrip {}",
+                (int) event.x(), (int) event.y(),
+                topWidget.map(w -> w.getClass().getSimpleName()).orElse("none"),
+                tabBar != null && tabBar.contains(event.x(), event.y()));
+        if (tabBar != null && tabBar.handleClick(event)) {
+            return true;
+        }
         if (scrollable && event.button() == 0
                 && event.x() >= scrollbarX - 2 && event.x() <= scrollbarX + SCROLLBAR_WIDTH + 2
                 && event.y() >= scrollbarTop && event.y() <= scrollbarTop + scrollbarHeight) {

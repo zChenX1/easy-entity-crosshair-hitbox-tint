@@ -29,9 +29,31 @@ public class DebugRendererMixin {
     private static boolean eecht$drawingFailed;
     @Unique
     private static boolean eecht$drawingLogged;
+    @Unique
+    private static int eecht$testFrames;
+    @Unique
+    private static net.minecraft.client.gui.screens.Screen eecht$testScreen;
 
     @Inject(method = "emitGizmos", at = @At("TAIL"))
     private void eecht$emitAimedEntityHitbox(Frustum frustum, double camX, double camY, double camZ, float partialTicks, CallbackInfo ci) {
+        // ===== TEMP TEST (remove before shipping) =====
+        Minecraft testClient = Minecraft.getInstance();
+        if (testClient.level != null) {
+            if (eecht$testFrames == 60) {
+                eecht$testScreen = new zchenx.client.ConfigScreen(null);
+                testClient.setScreenAndShow(eecht$testScreen);
+            } else if (eecht$testFrames == 120) {
+                boolean handled = eecht$testScreen.mouseClicked(new net.minecraft.client.input.MouseButtonEvent(
+                        213.0, 32.0, new net.minecraft.client.input.MouseButtonInfo(0, 0)), false);
+                EECHT_LOGGER.info("[TEMP TEST] screen click on tab 2 handled={}", handled);
+            } else if (eecht$testFrames == 200) {
+                net.minecraft.client.Screenshot.grab(testClient, false);
+                EECHT_LOGGER.info("[TEMP TEST] screenshot requested");
+            }
+            eecht$testFrames++;
+        }
+        // ===== /TEMP TEST =====
+
         if (eecht$drawingFailed) {
             return;
         }
